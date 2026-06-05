@@ -167,6 +167,7 @@ fun MainScreen(repository: SafeCallRepository) {
     var hasPhoneStatePermission by remember { mutableStateOf(false) }
     var hasLocationPermission by remember { mutableStateOf(false) }
     var hasAnswerCallsPermission by remember { mutableStateOf(false) }
+    var hasNotificationPermission by remember { mutableStateOf(false) }
 
     val updatePermissions = {
         hasSmsPermission = ContextCompat.checkSelfPermission(
@@ -186,6 +187,14 @@ fun MainScreen(repository: SafeCallRepository) {
         hasAnswerCallsPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.checkSelfPermission(
                 context, Manifest.permission.ANSWER_PHONE_CALLS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+        hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             true
@@ -982,7 +991,7 @@ fun MainScreen(repository: SafeCallRepository) {
             // [3] 세번째: 권한 부여와 관련된 내용 및 배터리 설정
             // ==========================================
             item {
-                val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission
+                val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission && hasNotificationPermission
                 val containerColor = if (hasAll) Color(0xFFE8F5E9) else Color(0xFFFEF2F2)
                 val borderColor = if (hasAll) Color(0xFFA5D6A7) else Color(0xFFFCA5A5)
                 val titleColor = if (hasAll) Color(0xFF0F5132) else Color(0xFF842029)
@@ -1039,6 +1048,9 @@ fun MainScreen(repository: SafeCallRepository) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                             permissions.add(Manifest.permission.ANSWER_PHONE_CALLS)
                                         }
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
                                         permLauncher.launch(permissions.toTypedArray())
                                     },
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
@@ -1071,7 +1083,7 @@ fun MainScreen(repository: SafeCallRepository) {
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("2. 보호자 문자 발송 권한", fontSize = 13.sp, color = Color(0xFF475569))
+                            Text("2. 보호자 안심 문자 발송 권한", fontSize = 13.sp, color = Color(0xFF475569))
                             Text(
                                 text = if (hasSmsPermission) "허용됨" else "미허용",
                                 color = if (hasSmsPermission) Color(0xFF059669) else Color(0xFFDC2626),
@@ -1105,6 +1117,19 @@ fun MainScreen(repository: SafeCallRepository) {
                                 fontSize = 13.sp
                             )
                         }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("5. 알림 및 긴급 경보 권한", fontSize = 13.sp, color = Color(0xFF475569))
+                            Text(
+                                text = if (hasNotificationPermission) "허용됨" else "미허용",
+                                color = if (hasNotificationPermission) Color(0xFF059669) else Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(14.dp))
                         HorizontalDivider(color = Color(0x11000000))
@@ -1120,21 +1145,58 @@ fun MainScreen(repository: SafeCallRepository) {
 
                         Button(
                             onClick = {
+                                var succeeded = false
+                                // 1. Try requesting direct bypass prompt
                                 try {
                                     val intent = Intent().apply {
                                         action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
                                         data = Uri.parse("package:${context.packageName}")
                                     }
                                     context.startActivity(intent)
+                                    succeeded = true
                                 } catch (e: Exception) {
+                                    Log.e("MainActivity", "Direct ignore prompt failed", e)
+                                }
+
+                                if (!succeeded) {
+                                    // 2. Fallback to direct App Info Details settings (Highly supported on Android 12-16)
+                                    try {
+                                        val intent = Intent().apply {
+                                            action = android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                                            data = Uri.fromParts("package", context.packageName, null)
+                                        }
+                                        context.startActivity(intent)
+                                        Toast.makeText(
+                                            context,
+                                            "앱 상세 설정 화면이 열렸습니다.\n'배터리' -> '제한 없음(Unrestricted)'으로 전환해 주시면 오작동을 완전히 방지할 수 있습니다!",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        succeeded = true
+                                    } catch (e: Exception) {
+                                        Log.e("MainActivity", "App info screen failed", e)
+                                    }
+                                }
+
+                                if (!succeeded) {
+                                    // 3. Fallback to general background optimize listing
                                     try {
                                         val intent = Intent().apply {
                                             action = android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
                                         }
                                         context.startActivity(intent)
-                                    } catch (ex: Exception) {
-                                        Toast.makeText(context, "배터리 설정을 열 수 없습니다. 직접 기기 설정에서 '배터리 최적화 제외'를 등록해 주세요.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(
+                                            context,
+                                            "배터리 제한 목록이 열렸습니다.\n나의 필터 항목에서 '전체'를 누르고 이 어플을 필터 제외로 체크해 주세요.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        succeeded = true
+                                    } catch (e: Exception) {
+                                        Log.e("MainActivity", "General optimize screen failed", e)
                                     }
+                                }
+
+                                if (!succeeded) {
+                                    Toast.makeText(context, "배터리 설정을 편리하게 열 수 없었습니다. 기기 설정에서 배터리 최적화 제외를 수동 적용하세요.", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(

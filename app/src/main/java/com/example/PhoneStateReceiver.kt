@@ -80,7 +80,22 @@ class PhoneStateReceiver : BroadcastReceiver() {
             val triggerAtMillis = System.currentTimeMillis() + delayMillis
 
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (alarmManager.canScheduleExactAlarms()) {
+                        alarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            triggerAtMillis,
+                            pendingIntent
+                        )
+                    } else {
+                        // Fallback to non-exact wakeable alarm if exact alarm is restricted (Android 14+)
+                        alarmManager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            triggerAtMillis,
+                            pendingIntent
+                        )
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     alarmManager.setExactAndAllowWhileIdle(
                         AlarmManager.RTC_WAKEUP,
                         triggerAtMillis,
@@ -95,7 +110,25 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 }
                 Log.d("PhoneStateReceiver", "Safety check scheduled in ${delayMillis / 1000} seconds. Test mode: $isTestMode")
             } catch (e: Exception) {
-                Log.e("PhoneStateReceiver", "Alarm Scheduling Failed", e)
+                Log.e("PhoneStateReceiver", "Alarm Scheduling Failed. Falling back... ", e)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        alarmManager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            triggerAtMillis,
+                            pendingIntent
+                        )
+                    } else {
+                        alarmManager.set(
+                            AlarmManager.RTC_WAKEUP,
+                            triggerAtMillis,
+                            pendingIntent
+                        )
+                    }
+                    Log.d("PhoneStateReceiver", "Safety check scheduled via fallback alarm.")
+                } catch (ex: Exception) {
+                    Log.e("PhoneStateReceiver", "Critical: Failed to schedule alarm entirely", ex)
+                }
             }
         }
 
