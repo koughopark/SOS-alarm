@@ -12,6 +12,8 @@ import android.os.VibrationEffect
 import android.os.Build
 import android.location.Location
 import android.location.LocationManager
+import android.app.NotificationManager
+import android.media.AudioManager
 import android.telecom.TelecomManager
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -90,16 +92,63 @@ fun MainScreen(repository: SafeCallRepository) {
     val isServiceEnabled by repository.isServiceEnabledFlow.collectAsState(initial = true)
     val callLogs by repository.allLogsFlow.collectAsState(initial = emptyList())
 
+    val homeLatitude by repository.homeLatitudeFlow.collectAsState(initial = 0.0)
+    val homeLongitude by repository.homeLongitudeFlow.collectAsState(initial = 0.0)
+    val homeAddress by repository.homeAddressFlow.collectAsState(initial = "")
+    val isHomeAutoRingerEnabled by repository.isHomeAutoRingerEnabledFlow.collectAsState(initial = false)
+
     // Form inputs state
     var nameInput by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
     var isEditingGuardian by remember { mutableStateOf(false) }
+
+    var homeLatInput by remember { mutableStateOf("") }
+    var homeLngInput by remember { mutableStateOf("") }
+    var homeAddressInput by remember { mutableStateOf("") }
+    var isEditingHome by remember { mutableStateOf(false) }
 
     // Sync form inputs when DB values load
     LaunchedEffect(guardianName, guardianPhone) {
         if (!isEditingGuardian) {
             nameInput = guardianName
             phoneInput = guardianPhone
+        }
+    }
+
+    LaunchedEffect(homeLatitude, homeLongitude, homeAddress) {
+        if (!isEditingHome) {
+            homeLatInput = if (homeLatitude != 0.0) homeLatitude.toString() else ""
+            homeLngInput = if (homeLongitude != 0.0) homeLongitude.toString() else ""
+            homeAddressInput = if (homeAddress.isNotEmpty()) homeAddress else "우리집"
+        }
+    }
+
+    // Start/Stop location monitoring service automatically
+    LaunchedEffect(isHomeAutoRingerEnabled) {
+        val serviceIntent = Intent(context, LocationVolumeService::class.java)
+        if (isHomeAutoRingerEnabled) {
+            val isGpsGranted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (isGpsGranted) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(serviceIntent)
+                    } else {
+                        context.startService(serviceIntent)
+                    }
+                    Log.d("MainActivity", "Started LocationVolumeService foreground")
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to start Location volume service", e)
+                }
+            }
+        } else {
+            try {
+                context.stopService(serviceIntent)
+                Log.d("MainActivity", "Stopped LocationVolumeService")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to stop service", e)
+            }
         }
     }
 
@@ -991,6 +1040,280 @@ fun MainScreen(repository: SafeCallRepository) {
                                                 color = if (phone.isNotBlank()) Color(0xFF475569) else Color(0xFFDC2626)
                                             )
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3.8. 안심 귀가 벨소리 복원 설정 (지정 반경 진입 시 무음 해제)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0x99FFFFFF)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Geofence Icon",
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "3.8. 실시간 안심 귀가 무음 해제 🏠",
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0F172A)
+                                    )
+                                    Text(
+                                        text = "집 반경 50미터 진입 시 볼륨을 최대로 자동 변경합니다",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF64748B)
+                                    )
+                                }
+                            }
+
+                            Switch(
+                                checked = isHomeAutoRingerEnabled,
+                                onCheckedChange = { checked ->
+                                    if (checked && !hasLocationPermission) {
+                                        Toast.makeText(context, "귀가 감지를 사용하려면 먼저 상단의 'GPS 위치 권한'을 허용해주세요!", Toast.LENGTH_LONG).show()
+                                        return@Switch
+                                    }
+                                    coroutineScope.launch {
+                                        if (homeLatitude == 0.0 || homeLongitude == 0.0) {
+                                            Toast.makeText(context, "먼저 '우리집 위치' 정보를 등록해주세요!", Toast.LENGTH_LONG).show()
+                                            return@launch
+                                        }
+                                        repository.saveHomeAutoRingerEnabled(checked)
+                                        Toast.makeText(
+                                            context,
+                                            if (checked) "안심 귀가 자동 볼륨 해제 서비스가 시작되었습니다." else "서비스가 중지되었습니다.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFFF59E0B)
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Home registration details
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFFFEF3C7).copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+                                .border(1.dp, Color(0xFFFDE68A), RoundedCornerShape(16.dp))
+                                .padding(14.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Home,
+                                    contentDescription = "Home GPS Icon",
+                                    tint = Color(0xFFD97706),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "등록된 우리집 위치:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFF78350F)
+                                    )
+                                    if (homeLatitude != 0.0 && homeLongitude != 0.0) {
+                                        Text(
+                                            text = "$homeAddress\n(위도: ${String.format(Locale.US, "%.5f", homeLatitude)}, 경도: ${String.format(Locale.US, "%.5f", homeLongitude)})",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFB45309)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "미지정 (아래 버튼으로 현재 위치를 등록해 주세요)",
+                                            fontSize = 13.sp,
+                                            color = Color(0xFFB45309)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Fast registration button
+                        Button(
+                            onClick = {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                                    val providers = locationManager.getProviders(true)
+                                    var foundLocation: Location? = null
+                                    for (provider in providers) {
+                                        val loc = locationManager.getLastKnownLocation(provider) ?: continue
+                                        if (foundLocation == null || loc.accuracy < foundLocation.accuracy) {
+                                            foundLocation = loc
+                                        }
+                                    }
+                                    if (foundLocation != null) {
+                                        coroutineScope.launch {
+                                            repository.saveHomeLocation(foundLocation.latitude, foundLocation.longitude, "안심 지정 우리집")
+                                            Toast.makeText(context, "현재 GPS 좌표 (${String.format(Locale.US, "%.5f", foundLocation.latitude)}, ${String.format(Locale.US, "%.5f", foundLocation.longitude)})가 안전하게 우리집으로 등록되었습니다!", Toast.LENGTH_LONG).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "기기의 GPS 수신을 대기하고 있습니다. 잠시 후 다시 조절해주시거나 하단에서 수동 지정해주세요.", Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    Toast.makeText(context, "원활한 작동을 위해 먼저 위치 정보(GPS) 권한을 승인해 주세요.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.LocationOn, contentDescription = "Get GPS Location")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("현재 위치를 우리집으로 등록하기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Toggle/Expand manual coord editor
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = { isEditingHome = !isEditingHome }) {
+                                Text(
+                                    text = if (isEditingHome) "상세 설정 접기 ▲" else "수동 좌표 직접 지정 ▼",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF78350F)
+                                )
+                            }
+                        }
+
+                        if (isEditingHome) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = homeAddressInput,
+                                    onValueChange = { homeAddressInput = it },
+                                    label = { Text("위치 대표 명칭 (예: 우리집, 할머니 댁)") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFFF59E0B),
+                                        focusedLabelColor = Color(0xFFF59E0B)
+                                    )
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = homeLatInput,
+                                        onValueChange = { homeLatInput = it },
+                                        label = { Text("위도 (Latitude)") },
+                                        placeholder = { Text("37.5665") },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color(0xFFF59E0B),
+                                            focusedLabelColor = Color(0xFFF59E0B)
+                                        )
+                                    )
+                                    OutlinedTextField(
+                                        value = homeLngInput,
+                                        onValueChange = { homeLngInput = it },
+                                        label = { Text("경도 (Longitude)") },
+                                        placeholder = { Text("126.9780") },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color(0xFFF59E0B),
+                                            focusedLabelColor = Color(0xFFF59E0B)
+                                        )
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val latVal = homeLatInput.toDoubleOrNull()
+                                        val lngVal = homeLngInput.toDoubleOrNull()
+                                        if (latVal == null || lngVal == null) {
+                                            Toast.makeText(context, "올바른 숫자형 위도/경도를 소수로 입력해주세요 (예: 37.56, 126.97)", Toast.LENGTH_SHORT).show()
+                                            return@Button
+                                        }
+                                        coroutineScope.launch {
+                                            repository.saveHomeLocation(latVal, lngVal, homeAddressInput.trim())
+                                            isEditingHome = false
+                                            Toast.makeText(context, "수동 좌표가 정상 입력되어 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("수동 지정 완료", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        // Special DND helper if API level constraints apply
+                        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        val dndAccessNotGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            notificationManager.isNotificationPolicyAccessGranted == false
+                        } else {
+                            false
+                        }
+
+                        if (dndAccessNotGranted) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF7ED)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFFED7AA), RoundedCornerShape(12.dp))
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(
+                                        text = "⚠️ 중요 안내: 기기가 '무음 모드'일 경우, 앱이 무음을 강제로 해제하려면 '방해 금지 모드 허용 권한'이 필수적으로 필요합니다.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFFC2410C),
+                                        lineHeight = 15.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Button(
+                                        onClick = {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                                try {
+                                                    val intent = Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                                                    context.startActivity(intent)
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "권한 설정 창을 열지 못했습니다. 직접 기기 설정에서 '방해 금지 제어 허용'을 검색해 활성화 해주세요.", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(32.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("권한 설정 바로 가기", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }

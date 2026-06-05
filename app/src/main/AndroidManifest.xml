@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <application
         android:allowBackup="true"
@@ -53,6 +55,11 @@
 
         <receiver
             android:name=".AlarmReceiver"
+            android:exported="false" />
+
+        <service
+            android:name=".LocationVolumeService"
+            android:foregroundServiceType="location"
             android:exported="false" />
     </application>
 

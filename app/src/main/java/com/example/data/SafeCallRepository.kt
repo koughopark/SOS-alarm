@@ -84,5 +84,28 @@ class SafeCallRepository(context: Context) {
     suspend fun clearLogs() {
         callLogDao.clearLogs()
     }
+
+    // Home Location and Auto-Ringer features
+    val homeLatitudeFlow: Flow<Double> = settingDao.getSettingFlow("home_latitude")
+        .map { it?.value?.toDoubleOrNull() ?: 0.0 }
+
+    val homeLongitudeFlow: Flow<Double> = settingDao.getSettingFlow("home_longitude")
+        .map { it?.value?.toDoubleOrNull() ?: 0.0 }
+
+    val homeAddressFlow: Flow<String> = settingDao.getSettingFlow("home_address")
+        .map { it?.value ?: "" }
+
+    val isHomeAutoRingerEnabledFlow: Flow<Boolean> = settingDao.getSettingFlow("home_auto_ringer_enabled")
+        .map { it?.value?.toBoolean() ?: false }
+
+    suspend fun saveHomeLocation(latitude: Double, longitude: Double, address: String) {
+        settingDao.insertSetting(SettingEntity("home_latitude", latitude.toString()))
+        settingDao.insertSetting(SettingEntity("home_longitude", longitude.toString()))
+        settingDao.insertSetting(SettingEntity("home_address", address))
+    }
+
+    suspend fun saveHomeAutoRingerEnabled(enabled: Boolean) {
+        settingDao.insertSetting(SettingEntity("home_auto_ringer_enabled", enabled.toString()))
+    }
 }
 
