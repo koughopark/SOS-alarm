@@ -37,9 +37,10 @@ class PhoneStateReceiver : BroadcastReceiver() {
 
                 when (state) {
                     TelephonyManager.EXTRA_STATE_OFFHOOK -> {
-                        Log.d("PhoneStateReceiver", "Call active (OFFHOOK). Scheduling safety check after 60 mins.")
-                        // Real delay: 60 minutes.
-                        val delayMillis = 60 * 60 * 1000L
+                        val limitMinutes = repository.callLimitMinutesFlow.first()
+                        Log.d("PhoneStateReceiver", "Call active (OFFHOOK). Scheduling safety check after $limitMinutes mins.")
+                        // Real delay: limitMinutes minutes.
+                        val delayMillis = limitMinutes * 60 * 1000L
                         scheduleSafetyAlarm(context, delayMillis, false)
                         repository.addLog(0, "CALL_STARTED")
                     }

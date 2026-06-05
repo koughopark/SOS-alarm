@@ -107,5 +107,12 @@ class SafeCallRepository(context: Context) {
     suspend fun saveHomeAutoRingerEnabled(enabled: Boolean) {
         settingDao.insertSetting(SettingEntity("home_auto_ringer_enabled", enabled.toString()))
     }
+
+    val callLimitMinutesFlow: Flow<Int> = settingDao.getSettingFlow("call_limit_minutes")
+        .map { it?.value?.toIntOrNull() ?: 60 }
+
+    suspend fun saveCallLimitMinutes(minutes: Int) {
+        settingDao.insertSetting(SettingEntity("call_limit_minutes", minutes.toString()))
+    }
 }
 

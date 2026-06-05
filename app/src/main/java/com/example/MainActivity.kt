@@ -16,6 +16,8 @@ import android.app.NotificationManager
 import android.media.AudioManager
 import android.telecom.TelecomManager
 import android.util.Log
+import android.net.Uri
+import android.os.PowerManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -97,6 +99,8 @@ fun MainScreen(repository: SafeCallRepository) {
     val homeAddress by repository.homeAddressFlow.collectAsState(initial = "")
     val isHomeAutoRingerEnabled by repository.isHomeAutoRingerEnabledFlow.collectAsState(initial = false)
 
+    val callLimitMinutes by repository.callLimitMinutesFlow.collectAsState(initial = 60)
+
     // Form inputs state
     var nameInput by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
@@ -106,6 +110,8 @@ fun MainScreen(repository: SafeCallRepository) {
     var homeLngInput by remember { mutableStateOf("") }
     var homeAddressInput by remember { mutableStateOf("") }
     var isEditingHome by remember { mutableStateOf(false) }
+
+    var callLimitInput by remember { mutableStateOf("60") }
 
     // Sync form inputs when DB values load
     LaunchedEffect(guardianName, guardianPhone) {
@@ -121,6 +127,10 @@ fun MainScreen(repository: SafeCallRepository) {
             homeLngInput = if (homeLongitude != 0.0) homeLongitude.toString() else ""
             homeAddressInput = if (homeAddress.isNotEmpty()) homeAddress else "우리집"
         }
+    }
+
+    LaunchedEffect(callLimitMinutes) {
+        callLimitInput = callLimitMinutes.toString()
     }
 
     // Start/Stop location monitoring service automatically
@@ -244,6 +254,7 @@ fun MainScreen(repository: SafeCallRepository) {
 
     // Emergency Contacts Settings States
     val emergencyContacts by repository.getEmergencyContactsFlow().collectAsState(initial = emptyList())
+    val activeContacts = emergencyContacts.filter { it.phone.isNotBlank() }
     var editingContactIndex by remember { mutableStateOf(-1) }
     var contactNameInput by remember { mutableStateOf("") }
     var contactPhoneInput by remember { mutableStateOf("") }
@@ -254,19 +265,15 @@ fun MainScreen(repository: SafeCallRepository) {
         coroutineScope.launch {
             val locationStr = getSOSSendingLocation()
             val message = "[긴급 구조 요청] 도움이 필요합니다. 현재 위치: $locationStr"
+            
+            val uniquePhones = (emergencyContacts.map { it.phone } + guardianPhone)
+                .filter { it.isNotBlank() }
+                .distinct()
+                
             var dispatchedTargetCount = 0
 
-            // 1. Send to all 5 custom emergency contacts
-            emergencyContacts.forEach { contact ->
-                if (contact.phone.isNotBlank()) {
-                    sendSmsDirect(contact.phone, message)
-                    dispatchedTargetCount++
-                }
-            }
-
-            // 2. Also send to primary guardian if present
-            if (guardianPhone.isNotBlank()) {
-                sendSmsDirect(guardianPhone, message)
+            uniquePhones.forEach { Phone ->
+                sendSmsDirect(Phone, message)
                 dispatchedTargetCount++
             }
 
@@ -338,6 +345,16 @@ fun MainScreen(repository: SafeCallRepository) {
         }
     }
 
+    // Sync automatic editor for empty state "기본 1칸"
+    LaunchedEffect(emergencyContacts) {
+        val activeContacts = emergencyContacts.filter { it.phone.isNotBlank() }
+        if (activeContacts.isEmpty() && editingContactIndex == -1) {
+            editingContactIndex = 0
+            contactNameInput = ""
+            contactPhoneInput = ""
+        }
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -365,7 +382,9 @@ fun MainScreen(repository: SafeCallRepository) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
-            // 0. High Contrast SOS Panic Button (3 seconds hold)
+            // ==========================================
+            // [1] 최상단: SOS 버튼 (원터치 비상 구조 시스템)
+            // ==========================================
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFFECACA), RoundedCornerShape(24.dp)),
@@ -466,61 +485,12 @@ fun MainScreen(repository: SafeCallRepository) {
                 }
             }
 
-            // 0.5. Immediate Call Disconnect Button (전화 바로 끊기)
-            item {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFDC2626)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                        .clickable {
-                            simulatedCallActive = false
-                            PhoneStateReceiver.cancelSafetyAlarm(context)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                try {
-                                    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED) {
-                                        @Suppress("DEPRECATION")
-                                        telecomManager.endCall()
-                                        Log.d("MainActivity", "Call end commanded via Telecom API")
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("MainActivity", "Failed to terminate call", e)
-                                }
-                            }
-                            Toast.makeText(context, "즉시 전화를 끊었으며 통화가 종료되었습니다.", Toast.LENGTH_SHORT).show()
-                        }
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Phone,
-                                contentDescription = "End Call Icon",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "전화 바로 끊기 (통화 종료)",
-                                fontSize = 19.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
-                            )
-                        }
-                    }
-                }
-            }
 
-            // 1. Welcome & Service Status Card
+            // ==========================================
+            // [2] 두번째: 기능 실행 및 설정 (통화지키미, 비상보호자설정, 귀가무음해제)
+            // ==========================================
+            
+            // A. 통화지키미 (작동 정보 및 한도 시간 설정)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
@@ -578,281 +548,62 @@ fun MainScreen(repository: SafeCallRepository) {
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
-                            text = "어르신이 60분 이상 전화를 끊지 않으실 경우, 진동 알림을 보내고 안심 확인 화면을 띄웁니다. 미응답 상태가 계속되면 등록하신 보호자에게 긴급 구호 문자가 자동 전송됩니다.",
+                            text = "어르신이 지정하신 ${callLimitMinutes}분 이상 연속해서 전화를 끊지 않으실 경우 통화를 강제 모니터링하여, 화면에 안전 확인 선택창을 띄우고 진동을 울립니다. 일정 시간 확인 반응이 없을 시 등록된 비상 수신처 전체로 긴급 문자가 동시 전송됩니다.",
                             fontSize = 14.sp,
                             color = Color(0xFF475569),
                             lineHeight = 20.sp,
                             textAlign = TextAlign.Start
                         )
-                    }
-                }
-            }
 
-            // 2. Permission Status Cards
-            item {
-                val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission
-                val containerColor = if (hasAll) Color(0xFFE8F5E9) else Color(0xFFFEF2F2)
-                val borderColor = if (hasAll) Color(0xFFA5D6A7) else Color(0xFFFCA5A5)
-                val titleColor = if (hasAll) Color(0xFF0F5132) else Color(0xFF842029)
-                val statusText = if (hasAll) "정상 작동 준비 완료" else "작동을 위해 권한 동의 필요"
+                        Spacer(modifier = Modifier.height(14.dp))
 
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, borderColor, RoundedCornerShape(24.dp)),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = containerColor),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
+                        // 시간(분)을 수정할 수 있는 입력 UI
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (hasAll) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                    tint = if (hasAll) Color(0xFF059669) else Color(0xFFDC2626),
-                                    contentDescription = "Status",
-                                    modifier = Modifier.size(26.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = "연결 및 권한 현황",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        color = titleColor
-                                    )
-                                    Text(
-                                        text = statusText,
-                                        fontSize = 12.sp,
-                                        color = if (hasAll) Color(0xFF198754) else Color(0xFFDC3545)
-                                    )
-                                }
-                            }
-
-                            if (!hasAll) {
-                                Button(
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                    onClick = {
-                                        val permissions = mutableListOf(
-                                            Manifest.permission.SEND_SMS,
-                                            Manifest.permission.READ_PHONE_STATE,
-                                            Manifest.permission.VIBRATE,
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                            permissions.add(Manifest.permission.ANSWER_PHONE_CALLS)
-                                        }
-                                        permLauncher.launch(permissions.toTypedArray())
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("권한 허용", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-                        HorizontalDivider(color = Color(0x11000000))
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Individual permission logs
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("1. 통화 상태 감지 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                            Text(
-                                text = if (hasPhoneStatePermission) "허용됨" else "미허용",
-                                color = if (hasPhoneStatePermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("2. 보호자 문자 발송 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                            Text(
-                                text = if (hasSmsPermission) "허용됨" else "미허용",
-                                color = if (hasSmsPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("3. GPS 위치 정보 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                            Text(
-                                text = if (hasLocationPermission) "허용됨" else "미허용",
-                                color = if (hasLocationPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("4. 원격 전격 종료 제어 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                            Text(
-                                text = if (hasAnswerCallsPermission) "허용됨" else "미허용",
-                                color = if (hasAnswerCallsPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 3. Guardian Registration Card
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x99FFFFFF)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = "Lock Icon",
-                                    tint = Color(0xFF059669),
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "비상 보호자(수신처) 설정",
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
-                                )
-                            }
-
-                            if (!isEditingGuardian && guardianPhone.isNotEmpty()) {
-                                TextButton(onClick = { isEditingGuardian = true }) {
-                                    Text("수정하기", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF059669))
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        if (isEditingGuardian || guardianPhone.isEmpty()) {
-                            // Name input
                             OutlinedTextField(
-                                value = nameInput,
-                                onValueChange = { nameInput = it },
-                                label = { Text("보호자 성명 (예: 아들, 딸, 사회복지사)") },
-                                placeholder = { Text("예: 큰아들") },
-                                leadingIcon = { Icon(imageVector = Icons.Default.Person, contentDescription = "Name") },
-                                modifier = Modifier.fillMaxWidth(),
+                                value = callLimitInput,
+                                onValueChange = { 
+                                    if (it.all { char -> char.isDigit() }) {
+                                        callLimitInput = it
+                                    }
+                                },
+                                label = { Text("어르신 안심 감지 통화 시간 (분)") },
+                                placeholder = { Text("예: 60") },
+                                modifier = Modifier.weight(1f),
                                 singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = Color(0xFF059669),
                                     focusedLabelColor = Color(0xFF059669)
                                 )
                             )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Phone input
-                            OutlinedTextField(
-                                value = phoneInput,
-                                onValueChange = { phoneInput = it },
-                                label = { Text("보호자 휴대폰 번호 (- 제외)") },
-                                placeholder = { Text("01012345678") },
-                                leadingIcon = { Icon(imageVector = Icons.Default.Phone, contentDescription = "Phone") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = Color(0xFF059669),
-                                    focusedLabelColor = Color(0xFF059669)
-                                )
-                            )
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
+                            Spacer(modifier = Modifier.width(10.dp))
                             Button(
                                 onClick = {
-                                    if (nameInput.isBlank() || phoneInput.isBlank()) {
-                                        Toast.makeText(context, "보호자 성명과 연락처를 모두 입력해주세요.", Toast.LENGTH_SHORT).show()
+                                    val mins = callLimitInput.toIntOrNull()
+                                    if (mins == null || mins <= 0) {
+                                        Toast.makeText(context, "올바른 시간(분)을 입력해 주세요 (1분 이상).", Toast.LENGTH_SHORT).show()
                                         return@Button
                                     }
                                     coroutineScope.launch {
-                                        repository.saveGuardianInfo(nameInput.trim(), phoneInput.trim())
-                                        isEditingGuardian = false
-                                        Toast.makeText(context, "보호자 정보가 안전하게 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                        repository.saveCallLimitMinutes(mins)
+                                        Toast.makeText(context, "안심 감지 제한 한도가 ${mins}분으로 저장되었습니다!", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
-                                modifier = Modifier.fillMaxWidth().height(50.dp),
-                                shape = RoundedCornerShape(16.dp)
+                                modifier = Modifier.height(56.dp),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Check, contentDescription = "Save")
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("보호자 정보 등록/저장", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                }
-                            }
-                        } else {
-                            // Saved View Mode
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0xFFF0FDF4), RoundedCornerShape(16.dp))
-                                    .border(1.dp, Color(0xFFBBF7D0), RoundedCornerShape(16.dp))
-                                    .padding(16.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.AccountCircle,
-                                        contentDescription = "Account Icon",
-                                        tint = Color(0xFF059669),
-                                        modifier = Modifier.size(40.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Text(
-                                            text = guardianName,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 18.sp,
-                                            color = Color(0xFF065F46)
-                                        )
-                                        Text(
-                                            text = guardianPhone,
-                                            fontSize = 14.sp,
-                                            color = Color(0xFF047857)
-                                        )
-                                    }
-                                }
+                                Text("확정", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
             }
 
-            // 3.5. Emergency Contacts Card (Up to 5)
+            // B. 비상보호자(수신처) 및 긴급 연락처 통합 설정 (최대 5명 동적 추가식)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
@@ -876,13 +627,13 @@ fun MainScreen(repository: SafeCallRepository) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "긴급 연락처 설정 (최대 5명)",
+                                        text = "비상보호자(수신처) 설정 (최대 5명)",
                                         fontSize = 17.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF0F172A)
                                     )
                                     Text(
-                                        text = "SOS 긴급 요청 시 메세지가 동시에 발송됩니다",
+                                        text = "안심 긴급 구조 SOS 문자 수송을 위한 리스트",
                                         fontSize = 12.sp,
                                         color = Color(0xFF64748B)
                                     )
@@ -892,163 +643,113 @@ fun MainScreen(repository: SafeCallRepository) {
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Render 5 slots
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            for (index in 0 until 5) {
-                                val contact = emergencyContacts.find { it.index == index }
-                                val name = contact?.name ?: ""
-                                val phone = contact?.phone ?: ""
-                                val isEditing = editingContactIndex == index
-
-                                if (isEditing) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(Color(0xFFFEF2F2), RoundedCornerShape(16.dp))
-                                            .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(16.dp))
-                                            .padding(12.dp)
-                                    ) {
-                                        Text(
-                                            text = "${index + 1}번 긴급 연락처 등록",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp,
-                                            color = Color(0xFF991B1B)
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        OutlinedTextField(
-                                            value = contactNameInput,
-                                            onValueChange = { contactNameInput = it },
-                                            label = { Text("이름 또는 관계 (예: 큰딸, 이웃집)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = OutlinedTextFieldDefaults.colors(
-                                                focusedBorderColor = Color(0xFFDC2626),
-                                                focusedLabelColor = Color(0xFFDC2626)
-                                            )
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        OutlinedTextField(
-                                            value = contactPhoneInput,
-                                            onValueChange = { contactPhoneInput = it },
-                                            label = { Text("휴대폰 번호 (- 제외)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                            colors = OutlinedTextFieldDefaults.colors(
-                                                focusedBorderColor = Color(0xFFDC2626),
-                                                focusedLabelColor = Color(0xFFDC2626)
-                                            )
-                                        )
-                                        Spacer(modifier = Modifier.height(10.dp))
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Button(
-                                                onClick = {
-                                                    coroutineScope.launch {
-                                                        repository.saveEmergencyContact(index, contactNameInput.trim(), contactPhoneInput.trim())
-                                                        editingContactIndex = -1
-                                                        Toast.makeText(context, "${index + 1}번 긴급 연락처가 저장되었습니다.", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                                modifier = Modifier.weight(1f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("저장", fontWeight = FontWeight.Bold)
+                            // Render list of active registered contacts
+                            activeContacts.forEach { contact ->
+                                if (editingContactIndex == contact.index) {
+                                    // Under edit
+                                    ContactEditForm(
+                                        index = contact.index,
+                                        name = contactNameInput,
+                                        phone = contactPhoneInput,
+                                        onNameChange = { contactNameInput = it },
+                                        onPhoneChange = { contactPhoneInput = it },
+                                        onSave = {
+                                            if (contactNameInput.isBlank() || contactPhoneInput.isBlank()) {
+                                                Toast.makeText(context, "성명과 연락처를 모두 입력해주세요.", Toast.LENGTH_SHORT).show()
+                                                return@ContactEditForm
                                             }
-                                            OutlinedButton(
-                                                onClick = { editingContactIndex = -1 },
-                                                modifier = Modifier.weight(1f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("취소", color = Color(0xFF475569))
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Row presentation list
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(
-                                                if (phone.isNotBlank()) Color(0xFFFEF2F2) else Color(0xFFF8FAFC),
-                                                RoundedCornerShape(16.dp)
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (phone.isNotBlank()) Color(0xFFFEE2E2) else Color(0xFFE2E8F0),
-                                                RoundedCornerShape(16.dp)
-                                            )
-                                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(28.dp)
-                                                    .background(
-                                                        if (phone.isNotBlank()) Color(0xFFFCA5A5) else Color(0xFFCBD5E1),
-                                                        CircleShape
-                                                    ),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    text = "${index + 1}",
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = Color.White
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            if (phone.isNotBlank()) {
-                                                Column {
-                                                    Text(
-                                                        text = name,
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 15.sp,
-                                                        color = Color(0xFF7F1D1D)
-                                                    )
-                                                    Text(
-                                                        text = phone,
-                                                        fontSize = 12.sp,
-                                                        color = Color(0xFFB91C1C)
-                                                    )
+                                            coroutineScope.launch {
+                                                repository.saveEmergencyContact(contact.index, contactNameInput.trim(), contactPhoneInput.trim())
+                                                if (contact.index == 0) {
+                                                    repository.saveGuardianInfo(contactNameInput.trim(), contactPhoneInput.trim())
                                                 }
-                                            } else {
-                                                Text(
-                                                    text = "등록된 연락처가 없습니다.",
-                                                    fontSize = 13.sp,
-                                                    color = Color(0xFF64748B)
-                                                )
+                                                editingContactIndex = -1
+                                                Toast.makeText(context, "보호자 정보가 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        onCancel = { editingContactIndex = -1 }
+                                    )
+                                } else {
+                                    // Read-only Row view
+                                    ContactRow(
+                                        contact = contact,
+                                        onEdit = {
+                                            editingContactIndex = contact.index
+                                            contactNameInput = contact.name
+                                            contactPhoneInput = contact.phone
+                                        },
+                                        onDelete = {
+                                            coroutineScope.launch {
+                                                repository.saveEmergencyContact(contact.index, "", "")
+                                                if (contact.index == 0) {
+                                                    repository.saveGuardianInfo("", "")
+                                                }
+                                                Toast.makeText(context, "보호자 정보가 안전하게 삭제되었습니다.", Toast.LENGTH_SHORT).show()
                                             }
                                         }
-
-                                        TextButton(
-                                            onClick = {
-                                                editingContactIndex = index
-                                                contactNameInput = name
-                                                contactPhoneInput = phone
-                                            }
-                                        ) {
-                                            Text(
-                                                text = if (phone.isNotBlank()) "수정" else "등록",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                color = if (phone.isNotBlank()) Color(0xFF475569) else Color(0xFFDC2626)
-                                            )
-                                        }
-                                    }
+                                    )
                                 }
+                            }
+
+                            // If we are currently adding a new contact slot that is not in the active entries
+                            if (editingContactIndex != -1 && activeContacts.none { it.index == editingContactIndex }) {
+                                ContactEditForm(
+                                    index = editingContactIndex,
+                                    name = contactNameInput,
+                                    phone = contactPhoneInput,
+                                    onNameChange = { contactNameInput = it },
+                                    onPhoneChange = { contactPhoneInput = it },
+                                    onSave = {
+                                        if (contactNameInput.isBlank() || contactPhoneInput.isBlank()) {
+                                            Toast.makeText(context, "성명과 연락처를 모두 입력해주세요.", Toast.LENGTH_SHORT).show()
+                                            return@ContactEditForm
+                                        }
+                                        coroutineScope.launch {
+                                            repository.saveEmergencyContact(editingContactIndex, contactNameInput.trim(), contactPhoneInput.trim())
+                                            if (editingContactIndex == 0) {
+                                                repository.saveGuardianInfo(contactNameInput.trim(), contactPhoneInput.trim())
+                                            }
+                                            editingContactIndex = -1
+                                            Toast.makeText(context, "보호자 정보가 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onCancel = { editingContactIndex = -1 }
+                                )
+                            }
+                        }
+
+                        // Add button (only show when editing session is inactive)
+                        if (editingContactIndex == -1) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    if (activeContacts.size >= 5) {
+                                        Toast.makeText(context, "보호자는 최대 5명까지만 등록할 수 있습니다.", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        // Find first free index (0 to 4)
+                                        val emptyIndex = (0 until 5).firstOrNull { idx ->
+                                            activeContacts.none { it.index == idx }
+                                        } ?: 0
+                                        editingContactIndex = emptyIndex
+                                        contactNameInput = ""
+                                        contactPhoneInput = ""
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Contact icon")
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("보호자(긴급수신처) 추가 입력 (+)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             }
                         }
                     }
                 }
             }
 
-            // 3.8. 안심 귀가 벨소리 복원 설정 (지정 반경 진입 시 무음 해제)
+            // C. 실시간 안심 귀가 무음 해제 지오펜스
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
@@ -1072,7 +773,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "3.8. 실시간 안심 귀가 무음 해제 🏠",
+                                        text = "실시간 안심 귀가 무음 해제 🏠",
                                         fontSize = 17.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF0F172A)
@@ -1089,7 +790,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                 checked = isHomeAutoRingerEnabled,
                                 onCheckedChange = { checked ->
                                     if (checked && !hasLocationPermission) {
-                                        Toast.makeText(context, "귀가 감지를 사용하려면 먼저 상단의 'GPS 위치 권한'을 허용해주세요!", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "귀가 감지를 사용하려면 먼저 하단의 'GPS 위치 권한'을 허용해주세요!", Toast.LENGTH_LONG).show()
                                         return@Switch
                                     }
                                     coroutineScope.launch {
@@ -1114,7 +815,7 @@ fun MainScreen(repository: SafeCallRepository) {
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Home registration details
+                        // Home registration details outline
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1176,7 +877,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                             Toast.makeText(context, "현재 GPS 좌표 (${String.format(Locale.US, "%.5f", foundLocation.latitude)}, ${String.format(Locale.US, "%.5f", foundLocation.longitude)})가 안전하게 우리집으로 등록되었습니다!", Toast.LENGTH_LONG).show()
                                         }
                                     } else {
-                                        Toast.makeText(context, "기기의 GPS 수신을 대기하고 있습니다. 잠시 후 다시 조절해주시거나 하단에서 수동 지정해주세요.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "기기의 GPS 수신을 대기하고 있습니다. 잠시 후 다시 시도해주시거나 하단에서 수동 지정해주세요.", Toast.LENGTH_LONG).show()
                                     }
                                 } else {
                                     Toast.makeText(context, "원활한 작동을 위해 먼저 위치 정보(GPS) 권한을 승인해 주세요.", Toast.LENGTH_SHORT).show()
@@ -1191,61 +892,9 @@ fun MainScreen(repository: SafeCallRepository) {
                             Text("현재 위치를 우리집으로 등록하기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                        // Virtual entry simulation test button
-                        Button(
-                            onClick = {
-                                try {
-                                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                                    
-                                    // Switch ringer to Normal mode
-                                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
-                                    
-                                    // Maximize ringer volume
-                                    val maxRingVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-                                    audioManager.setStreamVolume(AudioManager.STREAM_RING, maxRingVol, AudioManager.FLAG_SHOW_UI)
-                                    
-                                    // Trigger brief vibration feedback to let the user know they clicked it and it succeeded
-                                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        vibrator.vibrate(android.os.VibrationEffect.createOneShot(200, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                    } else {
-                                        @Suppress("DEPRECATION")
-                                        vibrator.vibrate(200)
-                                    }
-
-                                    Toast.makeText(
-                                        context,
-                                        "🔔 [가상 귀가 성공] 집 반경 50m 이내에 가상 도달하여 무음/진동 모드가 해제되고 벨소리가 최대로 정상 복원되었습니다!",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                } catch (e: SecurityException) {
-                                    Toast.makeText(
-                                        context,
-                                        "⚠️ [가상 귀가 실패] '방해 금지 모드 권한'이 없어서 시스템 음량 모드를 제어할 수 없습니다. 아래의 권한 설정 버튼을 눌러 권한을 승인해 주세요.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                } catch (e: Exception) {
-                                    Toast.makeText(
-                                        context,
-                                        "오류 발생: ${e.message}",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)), // Emerald Green
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Simulate Entry")
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("가상 귀가 진입 테스트 실행", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Toggle/Expand manual coord editor
+                        // Toggle/Expand manual coord editor label
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End
@@ -1324,12 +973,194 @@ fun MainScreen(repository: SafeCallRepository) {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+
+            // ==========================================
+            // [3] 세번째: 권한 부여와 관련된 내용 및 배터리 설정
+            // ==========================================
+            item {
+                val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission
+                val containerColor = if (hasAll) Color(0xFFE8F5E9) else Color(0xFFFEF2F2)
+                val borderColor = if (hasAll) Color(0xFFA5D6A7) else Color(0xFFFCA5A5)
+                val titleColor = if (hasAll) Color(0xFF0F5132) else Color(0xFF842029)
+                val statusText = if (hasAll) "정상 작동 준비 완료" else "작동을 위해 필수 시스템 권한 승인 필요"
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, borderColor, RoundedCornerShape(24.dp)),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = containerColor),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (hasAll) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                    tint = if (hasAll) Color(0xFF059669) else Color(0xFFDC2626),
+                                    contentDescription = "Status icon",
+                                    modifier = Modifier.size(26.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "필수 연결 및 권한 현황",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp,
+                                        color = titleColor
+                                    )
+                                    Text(
+                                        text = statusText,
+                                        fontSize = 12.sp,
+                                        color = if (hasAll) Color(0xFF198754) else Color(0xFFDC3545)
+                                    )
+                                }
+                            }
+
+                            if (!hasAll) {
+                                Button(
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                    onClick = {
+                                        val permissions = mutableListOf(
+                                            Manifest.permission.SEND_SMS,
+                                            Manifest.permission.READ_PHONE_STATE,
+                                            Manifest.permission.VIBRATE,
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                            permissions.add(Manifest.permission.ANSWER_PHONE_CALLS)
+                                        }
+                                        permLauncher.launch(permissions.toTypedArray())
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("권한 허용", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = Color(0x11000000))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Individual permission checklists
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("1. 통화 상태 감지 권한", fontSize = 13.sp, color = Color(0xFF475569))
+                            Text(
+                                text = if (hasPhoneStatePermission) "허용됨" else "미허용",
+                                color = if (hasPhoneStatePermission) Color(0xFF059669) else Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("2. 보호자 문자 발송 권한", fontSize = 13.sp, color = Color(0xFF475569))
+                            Text(
+                                text = if (hasSmsPermission) "허용됨" else "미허용",
+                                color = if (hasSmsPermission) Color(0xFF059669) else Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("3. GPS 위치 정보 권한", fontSize = 13.sp, color = Color(0xFF475569))
+                            Text(
+                                text = if (hasLocationPermission) "허용됨" else "미허용",
+                                color = if (hasLocationPermission) Color(0xFF059669) else Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("4. 원격 종료 제어 권한", fontSize = 13.sp, color = Color(0xFF475569))
+                            Text(
+                                text = if (hasAnswerCallsPermission) "허용됨" else "미허용",
+                                color = if (hasAnswerCallsPermission) Color(0xFF059669) else Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = Color(0x11000000))
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // 배터리 최적화 예외설정 바로가기 배치
+                        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                        val isBatteryOptimizationsIgnored = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                        } else {
+                            true
+                        }
+
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = Intent().apply {
+                                        action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    try {
+                                        val intent = Intent().apply {
+                                            action = android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (ex: Exception) {
+                                        Toast.makeText(context, "배터리 설정을 열 수 없습니다. 직접 기기 설정에서 '배터리 최적화 제외'를 등록해 주세요.", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isBatteryOptimizationsIgnored) Color(0xFF059669) else Color(0xFFD97706)
+                            ),
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isBatteryOptimizationsIgnored) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                tint = Color.White,
+                                contentDescription = "Battery Optimization setting"
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isBatteryOptimizationsIgnored) "배터리 최적화 제외 설정 완료" else "배터리 최적화 제외 설정하러 가기",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color.White
+                            )
+                        }
 
                         // Special DND helper if API level constraints apply
-                        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                         val dndAccessNotGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                            notificationManager.isNotificationPolicyAccessGranted == false
+                            val alertNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            alertNotificationManager.isNotificationPolicyAccessGranted == false
                         } else {
                             false
                         }
@@ -1374,7 +1205,10 @@ fun MainScreen(repository: SafeCallRepository) {
                 }
             }
 
-            // 4. Elderly Simulation Controls Area (Highly intuitive for Emulators)
+
+            // ==========================================
+            // [4] 네번째: 기능테스트 2종 (가상 시뮬레이터 및 귀가 모조 테스트)
+            // ==========================================
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFFDE68A), RoundedCornerShape(24.dp)),
@@ -1392,7 +1226,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                 )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "기능 확인용 가상 시뮬레이터",
+                                "안심 서비스 가상 테스트 센터 (2종)",
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF78350F)
@@ -1401,15 +1235,81 @@ fun MainScreen(repository: SafeCallRepository) {
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "에뮬레이터 환경에서 실제 60분 통화가 힘든 경우, 아래 시뮬레이터 기능을 이용하여 전체 동선(모니터링 알림, 화면 진동, 버튼 발송 및 미응답 타임아웃)을 편리하게 테스트할 수 있습니다.",
+                            text = "앱의 긴급 모니터링 동작 및 귀가 무음 벨소리 복원을 가상 환경(에뮬레이터 등)에서 수월하게 진단 및 검증해볼 수 있는 시뮬레이션입니다.",
                             fontSize = 13.sp,
                             color = Color(0xFFB45309),
                             lineHeight = 18.sp
                         )
 
                         Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = "테스트 1: 가상 안심 귀가 진입 테스트",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color(0xFF78350F)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                        // Simulator Action Buttons
+                        // Test Box 1: Virtual entry simulation test button
+                        Button(
+                            onClick = {
+                                try {
+                                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                    
+                                    // Switch ringer to Normal mode
+                                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                                    
+                                    // Maximize ringer volume
+                                    val maxRingVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_RING, maxRingVol, AudioManager.FLAG_SHOW_UI)
+                                    
+                                    // Trigger brief vibration feedback to let the user know they clicked it and it succeeded
+                                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        vibrator.vibrate(android.os.VibrationEffect.createOneShot(200, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        vibrator.vibrate(200)
+                                    }
+
+                                    Toast.makeText(
+                                        context,
+                                        "🔔 [가상 귀가 성공] 집 반경 50m 이내에 가상 도달하여 무음/진동 모드가 해제되고 벨소리가 최대로 정상 복원되었습니다!",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } catch (e: SecurityException) {
+                                    Toast.makeText(
+                                        context,
+                                        "⚠️ [가상 귀가 실패] '방해 금지 모드 권한'이 없어서 시스템 음량 모드를 제어할 수 없습니다. 상단의 권한 설정 버튼을 눌러 권한을 승인해 주세요.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        "오류 발생: ${e.message}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)), // Emerald Green
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Simulate Entry")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("가상 귀가 진입 테스트 실행", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Text(
+                            text = "테스트 2: 가상 통화감지 시뮬레이터",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color(0xFF78350F)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Test Box 2: Simulator Action Buttons
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1417,7 +1317,7 @@ fun MainScreen(repository: SafeCallRepository) {
                             // Immediate Alert Trigger
                             Button(
                                 onClick = {
-                                    if (guardianPhone.isEmpty() && emergencyContacts.isEmpty()) {
+                                    if (guardianPhone.isEmpty() && activeContacts.isEmpty()) {
                                         Toast.makeText(context, "보호자 정보가 등록되지 않아도 가상 시뮬레이터 알림창을 즉시 실행합니다.", Toast.LENGTH_LONG).show()
                                     } else if (guardianPhone.isEmpty()) {
                                         Toast.makeText(context, "긴급 연락처 등록 상태에서 가상 시뮬레이터 알림창을 즉시 실행합니다.", Toast.LENGTH_SHORT).show()
@@ -1454,7 +1354,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                         PhoneStateReceiver.cancelSafetyAlarm(context)
                                         Toast.makeText(context, "가상 통화 감지가 중지되었습니다.", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        if (guardianPhone.isEmpty() && emergencyContacts.isEmpty()) {
+                                        if (guardianPhone.isEmpty() && activeContacts.isEmpty()) {
                                              Toast.makeText(context, "보호자 정보 등록 없이 가상 통화를 가동합니다. 15초 뒤 알림창이 뜹니다.", Toast.LENGTH_LONG).show()
                                         } else {
                                              Toast.makeText(context, "가상 통화가 시작되었습니다. 15초 뒤 감지 창이 자동 호출됩니다.", Toast.LENGTH_LONG).show()
@@ -1496,7 +1396,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                     .padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center
-                            ) {
+                             ) {
                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color(0xFFD97606))
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
@@ -1507,13 +1407,14 @@ fun MainScreen(repository: SafeCallRepository) {
                                 )
                             }
                         }
-
-
                     }
                 }
             }
 
-            // 5. Call Logs (Stored History in Room)
+
+            // ==========================================
+            // [5] 또 다른 하단: 상태 및 대응 이력 (Logs)
+            // ==========================================
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1622,6 +1523,134 @@ fun LogItem(log: CallLogEntity) {
                 color = Color(0xFF475569),
                 lineHeight = 18.sp
             )
+        }
+    }
+}
+
+@Composable
+fun ContactRow(
+    contact: EmergencyContact,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFFEF2F2), RoundedCornerShape(16.dp))
+            .border(1.dp, Color(0xFFFEE2E2), RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(Color(0xFFFCA5A5), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "${contact.index + 1}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = contact.name,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = Color(0xFF7F1D1D)
+                )
+                Text(
+                    text = contact.phone,
+                    fontSize = 12.sp,
+                    color = Color(0xFFB91C1C)
+                )
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onEdit) {
+                Text("수정", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF475569))
+            }
+            TextButton(onClick = onDelete) {
+                Text("삭제", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFDC2626))
+            }
+        }
+    }
+}
+
+@Composable
+fun ContactEditForm(
+    index: Int,
+    name: String,
+    phone: String,
+    onNameChange: (String) -> Unit,
+    onPhoneChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFFEF2F2), RoundedCornerShape(16.dp))
+            .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(16.dp))
+            .padding(12.dp)
+    ) {
+        Text(
+            text = if (index == 0) "비상 보호자 (대표) 등록/수정" else "${index + 1}번 긴급 연락처 등록/수정",
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Color(0xFF991B1B)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = name,
+            onValueChange = onNameChange,
+            label = { Text("이름 또는 관계 (예: 큰딸, 사회복지사, 이웃집)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFDC2626),
+                focusedLabelColor = Color(0xFFDC2626)
+            )
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = phone,
+            onValueChange = onPhoneChange,
+            label = { Text("휴대폰 번호 (- 제외)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFDC2626),
+                focusedLabelColor = Color(0xFFDC2626)
+            )
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Button(
+                onClick = onSave,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("저장", fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("취소", color = Color(0xFF475569))
+            }
         }
     }
 }

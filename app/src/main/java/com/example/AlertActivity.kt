@@ -296,6 +296,7 @@ fun AlertScreen(
 
     val guardianName by repository.guardianNameFlow.collectAsState(initial = "")
     val guardianPhone by repository.guardianPhoneFlow.collectAsState(initial = "")
+    val callLimitMinutes by repository.callLimitMinutesFlow.collectAsState(initial = 60)
 
     val guardianNameDisplay = if (guardianName.isNotEmpty()) guardianName else "미등록 보호자"
     val guardianRelationDisplay = if (guardianName.isNotEmpty()) "안심 보호자" else "보호자 등록이 필요합니다"
@@ -376,7 +377,7 @@ fun AlertScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "1시간째 통화 중 감지",
+                    text = "${callLimitMinutes}분째 통화 중 감지",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF475569)
