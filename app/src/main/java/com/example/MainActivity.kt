@@ -1191,6 +1191,58 @@ fun MainScreen(repository: SafeCallRepository) {
                             Text("현재 위치를 우리집으로 등록하기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
 
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Virtual entry simulation test button
+                        Button(
+                            onClick = {
+                                try {
+                                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                    
+                                    // Switch ringer to Normal mode
+                                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                                    
+                                    // Maximize ringer volume
+                                    val maxRingVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_RING, maxRingVol, AudioManager.FLAG_SHOW_UI)
+                                    
+                                    // Trigger brief vibration feedback to let the user know they clicked it and it succeeded
+                                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        vibrator.vibrate(android.os.VibrationEffect.createOneShot(200, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        vibrator.vibrate(200)
+                                    }
+
+                                    Toast.makeText(
+                                        context,
+                                        "🔔 [가상 귀가 성공] 집 반경 50m 이내에 가상 도달하여 무음/진동 모드가 해제되고 벨소리가 최대로 정상 복원되었습니다!",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } catch (e: SecurityException) {
+                                    Toast.makeText(
+                                        context,
+                                        "⚠️ [가상 귀가 실패] '방해 금지 모드 권한'이 없어서 시스템 음량 모드를 제어할 수 없습니다. 아래의 권한 설정 버튼을 눌러 권한을 승인해 주세요.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        "오류 발생: ${e.message}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)), // Emerald Green
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Simulate Entry")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("가상 귀가 진입 테스트 실행", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
                         Spacer(modifier = Modifier.height(10.dp))
 
                         // Toggle/Expand manual coord editor
