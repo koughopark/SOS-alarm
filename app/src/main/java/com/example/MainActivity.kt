@@ -257,8 +257,12 @@ fun MainScreen(repository: SafeCallRepository) {
                 // Automatically trigger test Alarm (AlertActivity) at 15 seconds
                 if (simulatedCallElapsedSeconds == 15) {
                     simulatedCallActive = false
-                    // Start test mode alarm receiver
-                    PhoneStateReceiver.scheduleSafetyAlarm(context, 100L, true)
+                    // Directly launch AlertActivity for robust instant verification!
+                    val intent = Intent(context, AlertActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("extra_test_mode", true)
+                    }
+                    context.startActivity(intent)
                 }
             }
         }
@@ -1038,12 +1042,19 @@ fun MainScreen(repository: SafeCallRepository) {
                             // Immediate Alert Trigger
                             Button(
                                 onClick = {
-                                    if (guardianPhone.isEmpty()) {
-                                        Toast.makeText(context, "먼저 보호자 연락처를 설정해주세요!", Toast.LENGTH_SHORT).show()
-                                        return@Button
+                                    if (guardianPhone.isEmpty() && emergencyContacts.isEmpty()) {
+                                        Toast.makeText(context, "보호자 정보가 등록되지 않아도 가상 시뮬레이터 알림창을 즉시 실행합니다.", Toast.LENGTH_LONG).show()
+                                    } else if (guardianPhone.isEmpty()) {
+                                        Toast.makeText(context, "긴급 연락처 등록 상태에서 가상 시뮬레이터 알림창을 즉시 실행합니다.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "즉시 테스트 알림창 진동 및 화면 감지를 실행합니다.", Toast.LENGTH_SHORT).show()
                                     }
-                                    // Trigger immediate Alarm in test mode
-                                    PhoneStateReceiver.scheduleSafetyAlarm(context, 100L, true)
+                                    // Direct explicit launch ensures immediate verification on any device, bypassing background launch limits!
+                                    val intent = Intent(context, AlertActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        putExtra("extra_test_mode", true)
+                                    }
+                                    context.startActivity(intent)
                                 },
                                 modifier = Modifier
                                     .weight(1f)
@@ -1063,17 +1074,17 @@ fun MainScreen(repository: SafeCallRepository) {
                             // Dynamic call monitoring simulator
                             Button(
                                 onClick = {
-                                    if (guardianPhone.isEmpty()) {
-                                        Toast.makeText(context, "먼저 보호자 연락처를 설정해주세요!", Toast.LENGTH_SHORT).show()
-                                        return@Button
-                                    }
                                     if (simulatedCallActive) {
                                         simulatedCallActive = false
                                         PhoneStateReceiver.cancelSafetyAlarm(context)
                                         Toast.makeText(context, "가상 통화 감지가 중지되었습니다.", Toast.LENGTH_SHORT).show()
                                     } else {
+                                        if (guardianPhone.isEmpty() && emergencyContacts.isEmpty()) {
+                                             Toast.makeText(context, "보호자 정보 등록 없이 가상 통화를 가동합니다. 15초 뒤 알림창이 뜹니다.", Toast.LENGTH_LONG).show()
+                                        } else {
+                                             Toast.makeText(context, "가상 통화가 시작되었습니다. 15초 뒤 감지 창이 자동 호출됩니다.", Toast.LENGTH_LONG).show()
+                                        }
                                         simulatedCallActive = true
-                                        Toast.makeText(context, "가상 통화가 시작되었습니다. 15초 뒤 감지 창이 뜹니다.", Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 modifier = Modifier
