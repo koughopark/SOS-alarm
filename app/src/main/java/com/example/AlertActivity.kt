@@ -56,6 +56,8 @@ class AlertActivity : ComponentActivity() {
     private var originalSpeakerphoneState: Boolean = false
     private var originalAudioMode: Int = -1
     private var mediaPlayer: android.media.MediaPlayer? = null
+    private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
+    private var audioFocusRequest: android.media.AudioFocusRequest? = null
     private lateinit var repository: SafeCallRepository
     private var isSmsSent = false
  
@@ -127,7 +129,6 @@ class AlertActivity : ComponentActivity() {
 
     private fun startVibrationAndSound() {
         try {
-            // Method B: Maximize media & alarm stream volumes, and force playback to the outer speakerphone
             audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
             audioManager?.let { am ->
                 // Save original values
@@ -136,10 +137,19 @@ class AlertActivity : ComponentActivity() {
                 originalSpeakerphoneState = am.isSpeakerphoneOn
                 originalAudioMode = am.mode
 
-                // Set mode to MODE_IN_COMMUNICATION so routing commands work consistently during calls
+                // 1. Maximize all relevant volume streams to guarantee absolute maximum volume can be reached
+                val maxAlarmVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
+                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, maxAlarmVol, 0)
+
+                val maxMusicVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, maxMusicVol, 0)
+
+                val maxRingVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_RING)
+                am.setStreamVolume(android.media.AudioManager.STREAM_RING, maxRingVol, 0)
+
+                // 2. Force mode and route to outer speakerphone
                 am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
 
-                // Force speaker routing
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val devices = am.availableCommunicationDevices
                     val speakerDevice = devices.find { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
@@ -149,60 +159,122 @@ class AlertActivity : ComponentActivity() {
                     } else {
                         @Suppress("DEPRECATION")
                         am.isSpeakerphoneOn = true
-                        Log.d("AlertActivity", "Speaker device not found in list, fallback to isSpeakerphoneOn = true")
+                        Log.d("AlertActivity", "Device list empty, fallback to speakerphoneOn = true")
                     }
                 } else {
                     @Suppress("DEPRECATION")
                     am.isSpeakerphoneOn = true
-                    Log.d("AlertActivity", "Legacy speakerphone set to true")
+                    Log.d("AlertActivity", "Legacy speakerphone forced to true")
                 }
 
-                // Maximize alarm and music streams to guarantee maximum audible volume
-                val maxAlarmVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
-                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, maxAlarmVol, 0)
-
-                val maxMusicVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
-                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, maxMusicVol, 0)
+                // 3. Request transient exclusive Audio Focus to override standard in-call background ducking policies
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val focusAttrs = android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                        audioFocusRequest = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                            .setAudioAttributes(focusAttrs)
+                            .setAcceptsDelayedFocusGain(false)
+                            .build()
+                        am.requestAudioFocus(audioFocusRequest!!)
+                        Log.d("AlertActivity", "Transient exclusive AudioFocus granted for Alarm usage.")
+                    } else {
+                        @Suppress("DEPRECATION")
+                        am.requestAudioFocus(
+                            null,
+                            android.media.AudioManager.STREAM_ALARM,
+                            android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
+                        )
+                        Log.d("AlertActivity", "Legacy focus requested.")
+                    }
+                } catch (focusEx: Exception) {
+                    Log.e("AlertActivity", "Failed to acquire audio focus", focusEx)
+                }
             }
         } catch (e: Exception) {
-            Log.e("AlertActivity", "Method B initialization failed", e)
+            Log.e("AlertActivity", "Audio controls initialization failed", e)
         }
 
         try {
-            // Get the alarm URI
+            // Get standard alarm or fallback to ringtone URI
             val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
                 ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
 
-            // Play via MediaPlayer configured for standard media stream (STREAM_MUSIC / USAGE_MEDIA)
-            // This is significantly louder and bypasses active phone call constraints on standard ringtones
+            // Play via MediaPlayer configured for USAGE_ALARM (designed to play loudly via system outer speaker)
             mediaPlayer = android.media.MediaPlayer().apply {
                 setDataSource(applicationContext, alertUri)
                 setAudioAttributes(
                     android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
                 isLooping = true
                 prepare()
+                setVolume(1.0f, 1.0f) // Set programmatic volume to absolute maximum (100% gain)
                 start()
             }
-            Log.d("AlertActivity", "MediaPlayer alarm played successfully under media usage stream.")
+            Log.d("AlertActivity", "MediaPlayer played with maximum alarm stream settings.")
+
+            // 4. Attach LoudnessEnhancer to the player's session. This amplifies the acoustic sound wave
+            // programmatically far beyond standard maximum device levels (target gain set in millibels: 3000mB = +30dB boost!)
+            try {
+                loudnessEnhancer = android.media.audiofx.LoudnessEnhancer(mediaPlayer!!.audioSessionId).apply {
+                    setTargetGain(3000)
+                    enabled = true
+                }
+                Log.d("AlertActivity", "LoudnessEnhancer successfully activated at +30dB gain.")
+            } catch (e: Exception) {
+                Log.e("AlertActivity", "Failed to start LoudnessEnhancer wave booster", e)
+            }
         } catch (e: Exception) {
-            Log.e("AlertActivity", "MediaPlayer playback failed, using fallback RingtoneManager", e)
+            Log.e("AlertActivity", "Loud USAGE_ALARM playback failed, attempting USAGE_MEDIA fallback", e)
             try {
                 val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
                     ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
-                ringtone = android.media.RingtoneManager.getRingtone(applicationContext, alertUri)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    ringtone?.audioAttributes = android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
+
+                mediaPlayer?.release()
+                mediaPlayer = android.media.MediaPlayer().apply {
+                    setDataSource(applicationContext, alertUri)
+                    setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    isLooping = true
+                    prepare()
+                    setVolume(1.0f, 1.0f)
+                    start()
                 }
-                ringtone?.play()
+
+                try {
+                    loudnessEnhancer = android.media.audiofx.LoudnessEnhancer(mediaPlayer!!.audioSessionId).apply {
+                        setTargetGain(2500)
+                        enabled = true
+                    }
+                    Log.d("AlertActivity", "LoudnessEnhancer activated on fallback media player at +25dB.")
+                } catch (leEx: Exception) {
+                    Log.e("AlertActivity", "LoudnessEnhancer fallback failed", leEx)
+                }
             } catch (fallbackEx: Exception) {
-                Log.e("AlertActivity", "Sound play fallback failed completely", fallbackEx)
+                Log.e("AlertActivity", "Fallback media player failed, using Ringtone player", fallbackEx)
+                try {
+                    val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                        ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+                    ringtone = android.media.RingtoneManager.getRingtone(applicationContext, alertUri)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        ringtone?.audioAttributes = android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    }
+                    ringtone?.play()
+                } catch (rEx: Exception) {
+                    Log.e("AlertActivity", "All audio options failed", rEx)
+                }
             }
         }
 
@@ -214,13 +286,12 @@ class AlertActivity : ComponentActivity() {
                 @Suppress("DEPRECATION")
                 getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             }
- 
+
             vibrator?.let {
                 if (it.hasVibrator()) {
-                    // Strong alternating pulse: Vibrate 1000ms, Sleep 400ms
                     val pattern = longArrayOf(0, 1000, 400, 1000, 400)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        it.vibrate(VibrationEffect.createWaveform(pattern, 1)) // repeat from index 1
+                        it.vibrate(VibrationEffect.createWaveform(pattern, 1))
                     } else {
                         @Suppress("DEPRECATION")
                         it.vibrate(pattern, 1)
@@ -244,6 +315,15 @@ class AlertActivity : ComponentActivity() {
             Log.e("AlertActivity", "Failed to stop ringtone", e)
         }
         try {
+            loudnessEnhancer?.let {
+                it.enabled = false
+                it.release()
+            }
+            loudnessEnhancer = null
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to release loudnessEnhancer", e)
+        }
+        try {
             mediaPlayer?.let {
                 if (it.isPlaying) {
                     it.stop()
@@ -255,8 +335,17 @@ class AlertActivity : ComponentActivity() {
             Log.e("AlertActivity", "Failed to stop/release mediaPlayer", e)
         }
         try {
-            // Restore stream volumes and speakerphone status
             audioManager?.let { am ->
+                // Abandon Audio Focus
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.abandonAudioFocus(null)
+                }
+                audioFocusRequest = null
+
+                // Restore stream volumes and speakerphone status
                 if (originalAlarmVolume != -1) {
                     am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, originalAlarmVolume, 0)
                 }
@@ -272,7 +361,7 @@ class AlertActivity : ComponentActivity() {
                     @Suppress("DEPRECATION")
                     am.isSpeakerphoneOn = originalSpeakerphoneState
                 }
-                Log.d("AlertActivity", "Audio settings and routing restored to original state.")
+                Log.d("AlertActivity", "Audio focus, settings, and routing successfully restored to original states.")
             }
         } catch (e: Exception) {
             Log.e("AlertActivity", "Failed to restore audio configurations", e)
