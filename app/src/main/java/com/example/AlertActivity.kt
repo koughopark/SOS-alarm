@@ -50,6 +50,8 @@ class AlertActivity : ComponentActivity() {
  
     private var vibrator: Vibrator? = null
     private var ringtone: android.media.Ringtone? = null
+    private var audioManager: android.media.AudioManager? = null
+    private var originalAlarmVolume: Int = -1
     private lateinit var repository: SafeCallRepository
     private var isSmsSent = false
  
@@ -121,6 +123,19 @@ class AlertActivity : ComponentActivity() {
 
     private fun startVibrationAndSound() {
         try {
+            // Method A: Maximize standard alarm stream volume to ensure it can be heard loudly
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            audioManager?.let { am ->
+                val maxVolume = am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
+                originalAlarmVolume = am.getStreamVolume(android.media.AudioManager.STREAM_ALARM)
+                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, maxVolume, 0)
+                Log.d("AlertActivity", "Alarm volume maximized to $maxVolume (original: $originalAlarmVolume)")
+            }
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to maximize alarm volume", e)
+        }
+
+        try {
             // Play high priority alarm ringtone bypassing silent profiles if custom configurations exist
             val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
                 ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
@@ -173,6 +188,14 @@ class AlertActivity : ComponentActivity() {
             ringtone?.stop()
         } catch (e: Exception) {
             Log.e("AlertActivity", "Failed to stop ringtone", e)
+        }
+        try {
+            if (originalAlarmVolume != -1) {
+                audioManager?.setStreamVolume(android.media.AudioManager.STREAM_ALARM, originalAlarmVolume, 0)
+                Log.d("AlertActivity", "Alarm volume restored to original: $originalAlarmVolume")
+            }
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to restore alarm volume", e)
         }
     }
 
