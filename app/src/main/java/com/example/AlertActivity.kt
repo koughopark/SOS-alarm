@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 class AlertActivity : ComponentActivity() {
  
     private var vibrator: Vibrator? = null
+    private var ringtone: android.media.Ringtone? = null
     private lateinit var repository: SafeCallRepository
     private var isSmsSent = false
  
@@ -71,8 +72,8 @@ class AlertActivity : ComponentActivity() {
  
         repository = SafeCallRepository(this)
  
-        // Start strong vibration
-        startVibration()
+        // Start strong vibration and alarm sound
+        startVibrationAndSound()
  
         val isTestMode = intent.getBooleanExtra("extra_test_mode", false)
         val initialSeconds = if (isTestMode) 15 else 300 // 5 minutes = 300s, test mode = 15s
@@ -98,7 +99,7 @@ class AlertActivity : ComponentActivity() {
     }
 
     private fun endActiveCall() {
-        stopVibration()
+        stopVibrationAndSound()
         lifecycleScope.launch {
             repository.addLog(0, "CALL_ENDED")
         }
@@ -118,7 +119,24 @@ class AlertActivity : ComponentActivity() {
         finish()
     }
 
-    private fun startVibration() {
+    private fun startVibrationAndSound() {
+        try {
+            // Play high priority alarm ringtone bypassing silent profiles if custom configurations exist
+            val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+            ringtone = android.media.RingtoneManager.getRingtone(applicationContext, alertUri)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                ringtone?.audioAttributes = android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            }
+            ringtone?.play()
+            Log.d("AlertActivity", "Alarm ringtone started successfully.")
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Sound play fallback failed", e)
+        }
+
         try {
             vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
@@ -127,7 +145,7 @@ class AlertActivity : ComponentActivity() {
                 @Suppress("DEPRECATION")
                 getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             }
-
+ 
             vibrator?.let {
                 if (it.hasVibrator()) {
                     // Strong alternating pulse: Vibrate 1000ms, Sleep 400ms
@@ -145,14 +163,23 @@ class AlertActivity : ComponentActivity() {
         }
     }
 
-    private fun stopVibration() {
-        vibrator?.cancel()
+    private fun stopVibrationAndSound() {
+        try {
+            vibrator?.cancel()
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to cancel vibration", e)
+        }
+        try {
+            ringtone?.stop()
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to stop ringtone", e)
+        }
     }
 
     private fun handleSafeResponse() {
         if (isSmsSent) return
         isSmsSent = true
-        stopVibration()
+        stopVibrationAndSound()
 
         lifecycleScope.launch {
             val primaryPhone = repository.getGuardianPhone()
@@ -206,7 +233,7 @@ class AlertActivity : ComponentActivity() {
     private fun handleTimeoutResponse() {
         if (isSmsSent) return
         isSmsSent = true
-        stopVibration()
+        stopVibrationAndSound()
 
         lifecycleScope.launch {
             val primaryPhone = repository.getGuardianPhone()
@@ -241,7 +268,7 @@ class AlertActivity : ComponentActivity() {
     private fun handleTimeoutResponseOld() {
         if (isSmsSent) return
         isSmsSent = true
-        stopVibration()
+        stopVibrationAndSound()
 
         lifecycleScope.launch {
             val phone = repository.getGuardianPhone()
@@ -277,7 +304,7 @@ class AlertActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        stopVibration()
+        stopVibrationAndSound()
         super.onDestroy()
     }
 }

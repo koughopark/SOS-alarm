@@ -17,9 +17,11 @@ class AlarmReceiver : BroadcastReceiver() {
             putExtra("extra_test_mode", isTestMode)
         }
 
-        // 2. Set up high-priority full-screen intent notification to bypass background limits on Android 10-16
+        // 2. Set up high-priority full-screen intent notification to bypass background limits on Android 10-14
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        val channelId = "emergency_alarm_channel"
+        val channelId = "emergency_alarm_channel_v3"
+        val alarmSoundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
         
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             val channel = android.app.NotificationChannel(
@@ -32,6 +34,13 @@ class AlarmReceiver : BroadcastReceiver() {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 1000, 400, 1000, 400, 1000)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setSound(
+                    alarmSoundUri,
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
             }
             notificationManager.createNotificationChannel(channel)
         }
@@ -52,6 +61,7 @@ class AlarmReceiver : BroadcastReceiver() {
             .setCategory(androidx.core.app.NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
             .setVibrate(longArrayOf(0, 1000, 400, 1000, 400, 1000))
+            .setSound(alarmSoundUri)
             .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
             .setFullScreenIntent(pendingIntent, true) // Core bypass: forces display immediately over background/lockscreen
 
