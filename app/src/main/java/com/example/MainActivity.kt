@@ -168,6 +168,7 @@ fun MainScreen(repository: SafeCallRepository) {
     var hasLocationPermission by remember { mutableStateOf(false) }
     var hasAnswerCallsPermission by remember { mutableStateOf(false) }
     var hasNotificationPermission by remember { mutableStateOf(false) }
+    var hasOverlayPermission by remember { mutableStateOf(false) }
 
     val updatePermissions = {
         hasSmsPermission = ContextCompat.checkSelfPermission(
@@ -199,6 +200,12 @@ fun MainScreen(repository: SafeCallRepository) {
         } else {
             true
         }
+
+        hasOverlayPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            android.provider.Settings.canDrawOverlays(context)
+        } else {
+            true
+        }
     }
 
     // Dynamic permission request launcher
@@ -218,6 +225,20 @@ fun MainScreen(repository: SafeCallRepository) {
     // Trigger initial permission assessment
     LaunchedEffect(key1 = true) {
         updatePermissions()
+    }
+
+    // Refresh permissions automatically when user returns from settings screen
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                updatePermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     // SOS triggering and location retrieval helper
@@ -991,7 +1012,7 @@ fun MainScreen(repository: SafeCallRepository) {
             // [3] 세번째: 권한 부여와 관련된 내용 및 배터리 설정
             // ==========================================
             item {
-                val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission && hasNotificationPermission
+                val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission && hasNotificationPermission && hasOverlayPermission
                 val containerColor = if (hasAll) Color(0xFFE8F5E9) else Color(0xFFFEF2F2)
                 val borderColor = if (hasAll) Color(0xFFA5D6A7) else Color(0xFFFCA5A5)
                 val titleColor = if (hasAll) Color(0xFF0F5132) else Color(0xFF842029)
@@ -1038,6 +1059,24 @@ fun MainScreen(repository: SafeCallRepository) {
                                 Button(
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
                                     onClick = {
+                                        // 1. Request overlay permission first if needed (Android 6.0+)
+                                        if (!hasOverlayPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                            try {
+                                                val intent = Intent(
+                                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    Uri.parse("package:${context.packageName}")
+                                                )
+                                                context.startActivity(intent)
+                                                Toast.makeText(context, "다른 앱 위에 표시 권한을 허용해 주세요!", Toast.LENGTH_SHORT).show()
+                                            } catch (e: Exception) {
+                                                try {
+                                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                                    context.startActivity(intent)
+                                                } catch (ex: Exception) {}
+                                            }
+                                        }
+
+                                        // 2. Request conventional runtime permissions
                                         val permissions = mutableListOf(
                                             Manifest.permission.SEND_SMS,
                                             Manifest.permission.READ_PHONE_STATE,
@@ -1129,6 +1168,47 @@ fun MainScreen(repository: SafeCallRepository) {
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
                             )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("6. 다른 앱 위에 표시 권한 (필수)", fontSize = 13.sp, color = Color(0xFF475569))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (hasOverlayPermission) "허용됨" else "미허용",
+                                    color = if (hasOverlayPermission) Color(0xFF059669) else Color(0xFFDC2626),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                if (!hasOverlayPermission) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "[설정]",
+                                        color = Color(0xFF2563EB),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.clickable {
+                                            try {
+                                                val intent = Intent(
+                                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    Uri.parse("package:${context.packageName}")
+                                                )
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                try {
+                                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                                    context.startActivity(intent)
+                                                } catch (ex: Exception) {
+                                                    Toast.makeText(context, "다른 앱 위에 표시 설정창을 열 수 없습니다. 직접 기기 설정에서 허용해 주세요.", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))

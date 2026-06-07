@@ -30,6 +30,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 description = "지정된 안심 통화 시간 도달 시 안전 유무 알림을 전송하는 전용 채널입니다."
                 enableLights(true)
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 1000, 400, 1000, 400, 1000)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             }
             notificationManager.createNotificationChannel(channel)
@@ -50,6 +51,7 @@ class AlarmReceiver : BroadcastReceiver() {
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
             .setCategory(androidx.core.app.NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 1000, 400, 1000, 400, 1000))
             .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
             .setFullScreenIntent(pendingIntent, true) // Core bypass: forces display immediately over background/lockscreen
 
