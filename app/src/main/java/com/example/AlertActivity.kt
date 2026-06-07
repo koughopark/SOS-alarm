@@ -52,6 +52,10 @@ class AlertActivity : ComponentActivity() {
     private var ringtone: android.media.Ringtone? = null
     private var audioManager: android.media.AudioManager? = null
     private var originalAlarmVolume: Int = -1
+    private var originalMusicVolume: Int = -1
+    private var originalSpeakerphoneState: Boolean = false
+    private var originalAudioMode: Int = -1
+    private var mediaPlayer: android.media.MediaPlayer? = null
     private lateinit var repository: SafeCallRepository
     private var isSmsSent = false
  
@@ -123,33 +127,83 @@ class AlertActivity : ComponentActivity() {
 
     private fun startVibrationAndSound() {
         try {
-            // Method A: Maximize standard alarm stream volume to ensure it can be heard loudly
+            // Method B: Maximize media & alarm stream volumes, and force playback to the outer speakerphone
             audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
             audioManager?.let { am ->
-                val maxVolume = am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
+                // Save original values
                 originalAlarmVolume = am.getStreamVolume(android.media.AudioManager.STREAM_ALARM)
-                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, maxVolume, 0)
-                Log.d("AlertActivity", "Alarm volume maximized to $maxVolume (original: $originalAlarmVolume)")
+                originalMusicVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                originalSpeakerphoneState = am.isSpeakerphoneOn
+                originalAudioMode = am.mode
+
+                // Set mode to MODE_IN_COMMUNICATION so routing commands work consistently during calls
+                am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+
+                // Force speaker routing
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val devices = am.availableCommunicationDevices
+                    val speakerDevice = devices.find { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    if (speakerDevice != null) {
+                        val active = am.setCommunicationDevice(speakerDevice)
+                        Log.d("AlertActivity", "Selected modern communication device TYPE_BUILTIN_SPEAKER: $active")
+                    } else {
+                        @Suppress("DEPRECATION")
+                        am.isSpeakerphoneOn = true
+                        Log.d("AlertActivity", "Speaker device not found in list, fallback to isSpeakerphoneOn = true")
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = true
+                    Log.d("AlertActivity", "Legacy speakerphone set to true")
+                }
+
+                // Maximize alarm and music streams to guarantee maximum audible volume
+                val maxAlarmVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
+                am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, maxAlarmVol, 0)
+
+                val maxMusicVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, maxMusicVol, 0)
             }
         } catch (e: Exception) {
-            Log.e("AlertActivity", "Failed to maximize alarm volume", e)
+            Log.e("AlertActivity", "Method B initialization failed", e)
         }
 
         try {
-            // Play high priority alarm ringtone bypassing silent profiles if custom configurations exist
+            // Get the alarm URI
             val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
                 ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
-            ringtone = android.media.RingtoneManager.getRingtone(applicationContext, alertUri)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ringtone?.audioAttributes = android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_ALARM)
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
+
+            // Play via MediaPlayer configured for standard media stream (STREAM_MUSIC / USAGE_MEDIA)
+            // This is significantly louder and bypasses active phone call constraints on standard ringtones
+            mediaPlayer = android.media.MediaPlayer().apply {
+                setDataSource(applicationContext, alertUri)
+                setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                isLooping = true
+                prepare()
+                start()
             }
-            ringtone?.play()
-            Log.d("AlertActivity", "Alarm ringtone started successfully.")
+            Log.d("AlertActivity", "MediaPlayer alarm played successfully under media usage stream.")
         } catch (e: Exception) {
-            Log.e("AlertActivity", "Sound play fallback failed", e)
+            Log.e("AlertActivity", "MediaPlayer playback failed, using fallback RingtoneManager", e)
+            try {
+                val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                    ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+                ringtone = android.media.RingtoneManager.getRingtone(applicationContext, alertUri)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    ringtone?.audioAttributes = android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                }
+                ringtone?.play()
+            } catch (fallbackEx: Exception) {
+                Log.e("AlertActivity", "Sound play fallback failed completely", fallbackEx)
+            }
         }
 
         try {
@@ -190,12 +244,38 @@ class AlertActivity : ComponentActivity() {
             Log.e("AlertActivity", "Failed to stop ringtone", e)
         }
         try {
-            if (originalAlarmVolume != -1) {
-                audioManager?.setStreamVolume(android.media.AudioManager.STREAM_ALARM, originalAlarmVolume, 0)
-                Log.d("AlertActivity", "Alarm volume restored to original: $originalAlarmVolume")
+            mediaPlayer?.let {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+                it.release()
+            }
+            mediaPlayer = null
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to stop/release mediaPlayer", e)
+        }
+        try {
+            // Restore stream volumes and speakerphone status
+            audioManager?.let { am ->
+                if (originalAlarmVolume != -1) {
+                    am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, originalAlarmVolume, 0)
+                }
+                if (originalMusicVolume != -1) {
+                    am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, originalMusicVolume, 0)
+                }
+                if (originalAudioMode != -1) {
+                    am.mode = originalAudioMode
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.clearCommunicationDevice()
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = originalSpeakerphoneState
+                }
+                Log.d("AlertActivity", "Audio settings and routing restored to original state.")
             }
         } catch (e: Exception) {
-            Log.e("AlertActivity", "Failed to restore alarm volume", e)
+            Log.e("AlertActivity", "Failed to restore audio configurations", e)
         }
     }
 
