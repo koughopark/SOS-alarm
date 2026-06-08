@@ -108,6 +108,29 @@ class SafeCallRepository(context: Context) {
         settingDao.insertSetting(SettingEntity("home_auto_ringer_enabled", enabled.toString()))
     }
 
+    // Office Location and Auto-Vibration features
+    val officeLatitudeFlow: Flow<Double> = settingDao.getSettingFlow("office_latitude")
+        .map { it?.value?.toDoubleOrNull() ?: 0.0 }
+
+    val officeLongitudeFlow: Flow<Double> = settingDao.getSettingFlow("office_longitude")
+        .map { it?.value?.toDoubleOrNull() ?: 0.0 }
+
+    val officeAddressFlow: Flow<String> = settingDao.getSettingFlow("office_address")
+        .map { it?.value ?: "" }
+
+    val isOfficeAutoVibrateEnabledFlow: Flow<Boolean> = settingDao.getSettingFlow("office_auto_vibrate_enabled")
+        .map { it?.value?.toBoolean() ?: false }
+
+    suspend fun saveOfficeLocation(latitude: Double, longitude: Double, address: String) {
+        settingDao.insertSetting(SettingEntity("office_latitude", latitude.toString()))
+        settingDao.insertSetting(SettingEntity("office_longitude", longitude.toString()))
+        settingDao.insertSetting(SettingEntity("office_address", address))
+    }
+
+    suspend fun saveOfficeAutoVibrateEnabled(enabled: Boolean) {
+        settingDao.insertSetting(SettingEntity("office_auto_vibrate_enabled", enabled.toString()))
+    }
+
     val callLimitMinutesFlow: Flow<Int> = settingDao.getSettingFlow("call_limit_minutes")
         .map { it?.value?.toIntOrNull() ?: 60 }
 

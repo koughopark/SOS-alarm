@@ -99,6 +99,11 @@ fun MainScreen(repository: SafeCallRepository) {
     val homeAddress by repository.homeAddressFlow.collectAsState(initial = "")
     val isHomeAutoRingerEnabled by repository.isHomeAutoRingerEnabledFlow.collectAsState(initial = false)
 
+    val officeLatitude by repository.officeLatitudeFlow.collectAsState(initial = 0.0)
+    val officeLongitude by repository.officeLongitudeFlow.collectAsState(initial = 0.0)
+    val officeAddress by repository.officeAddressFlow.collectAsState(initial = "")
+    val isOfficeAutoVibrateEnabled by repository.isOfficeAutoVibrateEnabledFlow.collectAsState(initial = false)
+
     val callLimitMinutes by repository.callLimitMinutesFlow.collectAsState(initial = 60)
 
     // Form inputs state
@@ -110,6 +115,11 @@ fun MainScreen(repository: SafeCallRepository) {
     var homeLngInput by remember { mutableStateOf("") }
     var homeAddressInput by remember { mutableStateOf("") }
     var isEditingHome by remember { mutableStateOf(false) }
+
+    var officeLatInput by remember { mutableStateOf("") }
+    var officeLngInput by remember { mutableStateOf("") }
+    var officeAddressInput by remember { mutableStateOf("") }
+    var isEditingOffice by remember { mutableStateOf(false) }
 
     var callLimitInput by remember { mutableStateOf("60") }
 
@@ -129,14 +139,22 @@ fun MainScreen(repository: SafeCallRepository) {
         }
     }
 
+    LaunchedEffect(officeLatitude, officeLongitude, officeAddress) {
+        if (!isEditingOffice) {
+            officeLatInput = if (officeLatitude != 0.0) officeLatitude.toString() else ""
+            officeLngInput = if (officeLongitude != 0.0) officeLongitude.toString() else ""
+            officeAddressInput = if (officeAddress.isNotEmpty()) officeAddress else "회사"
+        }
+    }
+
     LaunchedEffect(callLimitMinutes) {
         callLimitInput = callLimitMinutes.toString()
     }
 
     // Start/Stop location monitoring service automatically
-    LaunchedEffect(isHomeAutoRingerEnabled) {
+    LaunchedEffect(isHomeAutoRingerEnabled, isOfficeAutoVibrateEnabled) {
         val serviceIntent = Intent(context, LocationVolumeService::class.java)
-        if (isHomeAutoRingerEnabled) {
+        if (isHomeAutoRingerEnabled || isOfficeAutoVibrateEnabled) {
             val isGpsGranted = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
@@ -996,6 +1014,235 @@ fun MainScreen(repository: SafeCallRepository) {
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("수동 지정 완료", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+
+            // D. 실시간 특정 위치 자동 진동 전환 지오펜스
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0x99FFFFFF)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Office Geofence Icon",
+                                    tint = Color(0xFF8B5CF6),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "특정 위치 자동 진동 전환 📳",
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0F172A)
+                                    )
+                                    Text(
+                                        text = "특정지역(회사 등) 반경 50미터 진입 시 진동 모드로 자동 전환합니다",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF64748B)
+                                    )
+                                }
+                            }
+
+                            Switch(
+                                checked = isOfficeAutoVibrateEnabled,
+                                onCheckedChange = { checked ->
+                                    if (checked && !hasLocationPermission) {
+                                        Toast.makeText(context, "위치 진동 전환을 사용하려면 먼저 하단의 'GPS 위치 권한'을 허용해주세요!", Toast.LENGTH_LONG).show()
+                                        return@Switch
+                                    }
+                                    coroutineScope.launch {
+                                        if (officeLatitude == 0.0 || officeLongitude == 0.0) {
+                                            Toast.makeText(context, "먼저 '특정 위치(회사 등)' 정보를 등록해주세요!", Toast.LENGTH_LONG).show()
+                                            return@launch
+                                        }
+                                        repository.saveOfficeAutoVibrateEnabled(checked)
+                                        Toast.makeText(
+                                            context,
+                                            if (checked) "특정 위치 자동 진동 전환 서비스가 시작되었습니다." else "진동 자동 전환 서비스가 중지되었습니다.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFF8B5CF6)
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Office registration details outline
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFFEDE9FE).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                                .border(1.dp, Color(0xFFDDD6FE), RoundedCornerShape(16.dp))
+                                .padding(14.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Office GPS Icon",
+                                    tint = Color(0xFF7C3AED),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "등록된 안심 진동 위치:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFF4C1D95)
+                                    )
+                                    if (officeLatitude != 0.0 && officeLongitude != 0.0) {
+                                        Text(
+                                            text = "$officeAddress\n(위도: ${String.format(Locale.US, "%.5f", officeLatitude)}, 경도: ${String.format(Locale.US, "%.5f", officeLongitude)})",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF6D28D9)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "미지정 (아래 버튼으로 현재 위치를 등록해 주세요)",
+                                            fontSize = 13.sp,
+                                            color = Color(0xFF6D28D9)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Fast registration button
+                        Button(
+                            onClick = {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                                    val providers = locationManager.getProviders(true)
+                                    var foundLocation: Location? = null
+                                    for (provider in providers) {
+                                        val loc = locationManager.getLastKnownLocation(provider) ?: continue
+                                        if (foundLocation == null || loc.accuracy < foundLocation.accuracy) {
+                                            foundLocation = loc
+                                        }
+                                    }
+                                    if (foundLocation != null) {
+                                        coroutineScope.launch {
+                                            repository.saveOfficeLocation(foundLocation.latitude, foundLocation.longitude, "안심 지정 회사")
+                                            Toast.makeText(context, "현재 GPS 좌표 (${String.format(Locale.US, "%.5f", foundLocation.latitude)}, ${String.format(Locale.US, "%.5f", foundLocation.longitude)})가 안심 진동 위치로 정상 등록되었습니다!", Toast.LENGTH_LONG).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "기기의 GPS 수신을 대기하고 있습니다. 잠시 후 다시 시도해주시거나 하단에서 수동 지정해주세요.", Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    Toast.makeText(context, "원활한 작동을 위해 먼저 위치 정보(GPS) 권한을 승인해 주세요.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.LocationOn, contentDescription = "Get GPS Location")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("현재 위치를 진동 위치로 등록하기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Toggle/Expand manual coord editor label
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = { isEditingOffice = !isEditingOffice }) {
+                                Text(
+                                    text = if (isEditingOffice) "상세 설정 접기 ▲" else "수동 좌표 직접 지정 ▼",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF6D28D9)
+                                )
+                            }
+                        }
+
+                        if (isEditingOffice) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = officeAddressInput,
+                                    onValueChange = { officeAddressInput = it },
+                                    label = { Text("위치 대표 명칭 (예: 회사, 복지관, 도서실)") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFF8B5CF6),
+                                        focusedLabelColor = Color(0xFF8B5CF6)
+                                    )
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = officeLatInput,
+                                        onValueChange = { officeLatInput = it },
+                                        label = { Text("위도 (Latitude)") },
+                                        placeholder = { Text("37.5665") },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color(0xFF8B5CF6),
+                                            focusedLabelColor = Color(0xFF8B5CF6)
+                                        )
+                                    )
+                                    OutlinedTextField(
+                                        value = officeLngInput,
+                                        onValueChange = { officeLngInput = it },
+                                        label = { Text("경도 (Longitude)") },
+                                        placeholder = { Text("126.9780") },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color(0xFF8B5CF6),
+                                            focusedLabelColor = Color(0xFF8B5CF6)
+                                        )
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val latVal = officeLatInput.toDoubleOrNull()
+                                        val lngVal = officeLngInput.toDoubleOrNull()
+                                        if (latVal == null || lngVal == null) {
+                                            Toast.makeText(context, "올바른 숫자형 위도/경도를 소수로 입력해주세요 (예: 37.56, 126.97)", Toast.LENGTH_SHORT).show()
+                                            return@Button
+                                        }
+                                        coroutineScope.launch {
+                                            repository.saveOfficeLocation(latVal, lngVal, officeAddressInput.trim())
+                                            isEditingOffice = false
+                                            Toast.makeText(context, "수동 진동 좌표가 정상 입력되어 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
                                     modifier = Modifier.fillMaxWidth().height(44.dp),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {

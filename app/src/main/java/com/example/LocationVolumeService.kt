@@ -32,6 +32,7 @@ class LocationVolumeService : Service() {
     private lateinit var repository: SafeCallRepository
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var hasTriggeredAtHome = false
+    private var hasTriggeredAtOffice = false
 
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
@@ -83,32 +84,90 @@ class LocationVolumeService : Service() {
 
     private fun checkProximity(currentLocation: Location) {
         serviceScope.launch {
-            val enabled = repository.isHomeAutoRingerEnabledFlow.first()
-            if (!enabled) return@launch
+            // 1. Process Home Location (Auto Normal Volume Ringer)
+            val homeEnabled = repository.isHomeAutoRingerEnabledFlow.first()
+            if (homeEnabled) {
+                val homeLat = repository.homeLatitudeFlow.first()
+                val homeLng = repository.homeLongitudeFlow.first()
+                if (homeLat != 0.0 && homeLng != 0.0) {
+                    val homeLocation = Location("home").apply {
+                        latitude = homeLat
+                        longitude = homeLng
+                    }
+                    val distance = currentLocation.distanceTo(homeLocation)
+                    Log.d("LocationService", "Distance inside background monitor to home: $distance m")
 
-            val homeLat = repository.homeLatitudeFlow.first()
-            val homeLng = repository.homeLongitudeFlow.first()
-
-            if (homeLat == 0.0 && homeLng == 0.0) return@launch
-
-            val homeLocation = Location("home").apply {
-                latitude = homeLat
-                longitude = homeLng
+                    if (distance <= 50f) {
+                        if (!hasTriggeredAtHome) {
+                            hasTriggeredAtHome = true
+                            triggerVolumeNormalization()
+                        }
+                    } else if (distance > 100f) {
+                        if (hasTriggeredAtHome) {
+                            hasTriggeredAtHome = false
+                            updateNotificationText("안심 귀가 모드: 집 밖 (볼륨 자동 해제 대기 중)")
+                        }
+                    }
+                }
             }
 
-            val distance = currentLocation.distanceTo(homeLocation)
-            Log.d("LocationService", "Distance inside background monitor to home: $distance m")
+            // 2. Process Office/Specific Location (Auto Vibration Mode)
+            val officeEnabled = repository.isOfficeAutoVibrateEnabledFlow.first()
+            if (officeEnabled) {
+                val officeLat = repository.officeLatitudeFlow.first()
+                val officeLng = repository.officeLongitudeFlow.first()
+                if (officeLat != 0.0 && officeLng != 0.0) {
+                    val officeLocation = Location("office").apply {
+                        latitude = officeLat
+                        longitude = officeLng
+                    }
+                    val distance = currentLocation.distanceTo(officeLocation)
+                    Log.d("LocationService", "Distance inside background monitor to office: $distance m")
 
-            if (distance <= 50f) {
-                if (!hasTriggeredAtHome) {
-                    hasTriggeredAtHome = true
-                    triggerVolumeNormalization()
+                    if (distance <= 50f) {
+                        if (!hasTriggeredAtOffice) {
+                            hasTriggeredAtOffice = true
+                            triggerVibrationSetting()
+                        }
+                    } else if (distance > 100f) {
+                        if (hasTriggeredAtOffice) {
+                            hasTriggeredAtOffice = false
+                            updateNotificationText("회사 진동 모드: 특정지점 밖 (진동 자동 전환 대기 중)")
+                        }
+                    }
                 }
-            } else if (distance > 100f) {
-                if (hasTriggeredAtHome) {
-                    hasTriggeredAtHome = false
-                    updateNotificationText("안심 귀가 모드: 집 밖 (볼륨 자동 해제 대기 중)")
+            }
+        }
+    }
+
+    private fun triggerVibrationSetting() {
+        runOnMainThread {
+            try {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                
+                // Switch ringer to Vibrate mode
+                audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                
+                serviceScope.launch {
+                    val officeAddress = repository.officeAddressFlow.first().ifBlank { "지정구역" }
+                    runOnMainThread {
+                        updateNotificationText("위치 지정 진동 전환: $officeAddress 진입 완료!")
+                        Toast.makeText(
+                            applicationContext,
+                            "📳 [$officeAddress 진입] 벨소리가 해제되고 진동 모드로 자동 전환되었습니다!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
+            } catch (e: SecurityException) {
+                Log.e("LocationService", "Failed to change audio due to Do Not Disturb access", e)
+                Toast.makeText(
+                    applicationContext,
+                    "⚠️ [위치 진동 전환] '방해 금지 권한(기기 설정)'이 보장되지 않아 볼륨을 진동으로 변경하지 못했습니다.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } catch (e: Exception) {
+                Log.e("LocationService", "Failed to set audio settings to vibrate", e)
             }
         }
     }

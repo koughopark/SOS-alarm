@@ -58,6 +58,8 @@ class AlertActivity : ComponentActivity() {
     private var mediaPlayer: android.media.MediaPlayer? = null
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
     private var audioFocusRequest: android.media.AudioFocusRequest? = null
+    private var toneGenerator: android.media.ToneGenerator? = null
+    private var toneJob: kotlinx.coroutines.Job? = null
     private lateinit var repository: SafeCallRepository
     private var isSmsSent = false
  
@@ -198,6 +200,42 @@ class AlertActivity : ComponentActivity() {
         }
 
         try {
+            // Priority: STREAM_VOICE_CALL which sits at top level during an active phone conversation!
+            toneGenerator = android.media.ToneGenerator(android.media.AudioManager.STREAM_VOICE_CALL, 100)
+            toneJob = lifecycleScope.launch {
+                while (true) {
+                    try {
+                        // TONE_CDMA_HIGH_L (Loud, sharp, high pitch warning paging beep)
+                        toneGenerator?.startTone(android.media.ToneGenerator.TONE_CDMA_HIGH_L, 800)
+                        delay(1200)
+                    } catch (ex: Exception) {
+                        Log.e("AlertActivity", "Tone loop failed", ex)
+                        break
+                    }
+                }
+            }
+            Log.d("AlertActivity", "ToneGenerator initialized on STREAM_VOICE_CALL stream.")
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to start ToneGenerator on STREAM_VOICE_CALL, fallback to ALARM stream", e)
+            try {
+                toneGenerator = android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
+                toneJob = lifecycleScope.launch {
+                    while (true) {
+                        try {
+                            toneGenerator?.startTone(android.media.ToneGenerator.TONE_CDMA_HIGH_L, 800)
+                            delay(1200)
+                        } catch (ex: Exception) {
+                            Log.e("AlertActivity", "Tone loop failed", ex)
+                            break
+                        }
+                    }
+                }
+            } catch (e2: Exception) {
+                Log.e("AlertActivity", "All ToneGenerator initialization failed", e2)
+            }
+        }
+
+        try {
             // Get standard alarm or fallback to ringtone URI
             val alertUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
                 ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
@@ -308,6 +346,21 @@ class AlertActivity : ComponentActivity() {
             vibrator?.cancel()
         } catch (e: Exception) {
             Log.e("AlertActivity", "Failed to cancel vibration", e)
+        }
+        try {
+            toneJob?.cancel()
+            toneJob = null
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to cancel toneJob", e)
+        }
+        try {
+            toneGenerator?.let {
+                it.stopTone()
+                it.release()
+            }
+            toneGenerator = null
+        } catch (e: Exception) {
+            Log.e("AlertActivity", "Failed to release toneGenerator", e)
         }
         try {
             ringtone?.stop()
