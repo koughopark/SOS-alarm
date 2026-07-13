@@ -137,5 +137,12 @@ class SafeCallRepository(context: Context) {
     suspend fun saveCallLimitMinutes(minutes: Int) {
         settingDao.insertSetting(SettingEntity("call_limit_minutes", minutes.toString()))
     }
+
+    val safeHomeBrightnessPercentFlow: Flow<Int> = settingDao.getSettingFlow("safe_home_brightness_percent")
+        .map { it?.value?.toIntOrNull() ?: 100 }
+
+    suspend fun saveSafeHomeBrightnessPercent(percent: Int) {
+        settingDao.insertSetting(SettingEntity("safe_home_brightness_percent", percent.toString()))
+    }
 }
 

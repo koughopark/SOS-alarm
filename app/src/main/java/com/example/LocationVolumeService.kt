@@ -184,13 +184,42 @@ class LocationVolumeService : Service() {
                 val maxRingVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
                 audioManager.setStreamVolume(AudioManager.STREAM_RING, maxRingVol, AudioManager.FLAG_SHOW_UI)
                 
-                updateNotificationText("안심 귀가 완료: 무음/진동 해제 및 벨소리 최대 설정 완료!")
-                
-                Toast.makeText(
-                    applicationContext,
-                    "🔔 [안심 귀가] 집 반경 50m 이내에 도달하여 무음/진동 모드가 해제되고 벨소리가 최대로 정상 복원되었습니다!",
-                    Toast.LENGTH_LONG
-                ).show()
+                // Also maximize screen brightness if WRITE_SETTINGS is granted
+                serviceScope.launch {
+                    val percent = repository.safeHomeBrightnessPercentFlow.first()
+                    val brightnessVal = ((percent.coerceIn(1, 100) * 255) / 100).coerceIn(1, 255)
+                    runOnMainThread {
+                        try {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.System.canWrite(applicationContext)) {
+                                // Turn off automatic/adaptive brightness first so that setting manual value takes full effect and remains stable
+                                android.provider.Settings.System.putInt(
+                                    contentResolver,
+                                    android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,
+                                    android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                                )
+                                // Set screen brightness to custom value
+                                android.provider.Settings.System.putInt(
+                                    contentResolver,
+                                    android.provider.Settings.System.SCREEN_BRIGHTNESS,
+                                    brightnessVal
+                                )
+                                Log.d("LocationService", "Screen brightness set to custom value ($brightnessVal) ($percent%)")
+                            } else {
+                                Log.d("LocationService", "WRITE_SETTINGS permission not granted; skipping screen brightness adjustment.")
+                            }
+                        } catch (be: Exception) {
+                            Log.e("LocationService", "Failed to change screen brightness", be)
+                        }
+
+                        updateNotificationText("안심 귀가 완료: 무음/진동 해제 및 벨소리/화면밝기(${percent}%) 설정 완료!")
+                        
+                        Toast.makeText(
+                            applicationContext,
+                            "🔔☀️ [안심 귀가] 집 반경 50m 이내에 도달하여 벨소리와 화면 밝기가 ${percent}%로 자동 설정되었습니다!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
 
             } catch (e: SecurityException) {
                 Log.e("LocationService", "Failed to change audio due to Do Not Disturb access", e)
