@@ -186,7 +186,7 @@ class LocationVolumeService : Service() {
                 
                 // Also maximize screen brightness if WRITE_SETTINGS is granted
                 serviceScope.launch {
-                    val percent = repository.safeHomeBrightnessPercentFlow.first()
+                    val percent = repository.getSafeHomeBrightnessPercent()
                     val brightnessVal = ((percent.coerceIn(1, 100) * 255) / 100).coerceIn(1, 255)
                     runOnMainThread {
                         try {

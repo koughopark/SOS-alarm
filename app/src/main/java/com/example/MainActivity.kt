@@ -135,6 +135,11 @@ fun MainScreen(repository: SafeCallRepository) {
     var callLimitInput by remember { mutableStateOf("60") }
     var brightnessInput by remember { mutableStateOf("100") }
 
+    // Test result dialog states
+    var showTestResultDialog by remember { mutableStateOf(false) }
+    var testResultTitle by remember { mutableStateOf("") }
+    var testResultMessage by remember { mutableStateOf("") }
+
     LaunchedEffect(safeHomeBrightnessPercent) {
         brightnessInput = safeHomeBrightnessPercent.toString()
     }
@@ -1090,7 +1095,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                     modifier = Modifier.height(56.dp).weight(1f),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
-                                    Text("저장", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("설정 저장", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
 
                                 Button(
@@ -1127,11 +1132,11 @@ fun MainScreen(repository: SafeCallRepository) {
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
-                                    modifier = Modifier.height(56.dp).weight(1.3f),
+                                    modifier = Modifier.size(0.dp),
                                     shape = RoundedCornerShape(12.dp),
                                     contentPadding = PaddingValues(horizontal = 4.dp)
                                 ) {
-                                    Text("즉시 테스트", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("설정 저장", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                              }
 
@@ -1914,7 +1919,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                 onClick = {
                                     coroutineScope.launch {
                                         try {
-                                            val percent = repository.safeHomeBrightnessPercentFlow.first()
+                                            val percent = repository.getSafeHomeBrightnessPercent()
                                             val brightnessVal = ((percent.coerceIn(1, 100) * 255) / 100).coerceIn(1, 255)
 
                                             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -1927,7 +1932,14 @@ fun MainScreen(repository: SafeCallRepository) {
                                             audioManager.setStreamVolume(AudioManager.STREAM_RING, maxRingVol, AudioManager.FLAG_SHOW_UI)
                                             
                                             // Set screen brightness
-                                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.System.canWrite(context)) {
+                                            val hasWritePerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                                android.provider.Settings.System.canWrite(context)
+                                            } else {
+                                                true
+                                            }
+
+                                            var brightnessApplied = false
+                                            if (hasWritePerm) {
                                                 android.provider.Settings.System.putInt(
                                                     context.contentResolver,
                                                     android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,
@@ -1938,6 +1950,7 @@ fun MainScreen(repository: SafeCallRepository) {
                                                     android.provider.Settings.System.SCREEN_BRIGHTNESS,
                                                     brightnessVal
                                                 )
+                                                brightnessApplied = true
                                             }
 
                                             // Trigger brief vibration feedback to let the user know they clicked it and it succeeded
@@ -1949,23 +1962,31 @@ fun MainScreen(repository: SafeCallRepository) {
                                                 vibrator.vibrate(200)
                                             }
 
-                                            Toast.makeText(
-                                                context,
-                                                "🔔 [가상 귀가 성공] 집 반경 50m 이내에 가상 도달하여 무음/진동 모드가 해제되고 벨소리 및 화면 밝기(${percent}%)가 정상 설정되었습니다!",
-                                                Toast.LENGTH_LONG
-                                            ).show()
+                                            testResultTitle = "🔔 [가상 귀가 성공]"
+                                            testResultMessage = if (brightnessApplied) {
+                                                "집 반경 50m 이내에 가상 도달하여 다음 조치가 정상적으로 완료되었습니다:\n\n" +
+                                                "🔊 휴대폰 무음/진동 모드가 해제되고 '벨소리 모드'로 변경되었습니다.\n" +
+                                                "🔔 벨소리 볼륨이 최대로 설정되었습니다.\n" +
+                                                "☀️ 화면 밝기가 설정하신 비율(${percent}%)로 자동 조정되었습니다."
+                                            } else {
+                                                "집 반경 50m 이내에 가상 도달하여 다음 조치가 완료되었습니다:\n\n" +
+                                                "🔊 휴대폰 무음/진동 모드가 해제되고 '벨소리 모드'로 변경되었습니다.\n" +
+                                                "🔔 벨소리 볼륨이 최대로 설정되었습니다.\n\n" +
+                                                "⚠️ [화면 밝기 조절 실패]\n" +
+                                                "'화면 밝기 자동 조절 권한'이 없어서 화면 밝기를 ${percent}%로 변경하지 못했습니다. " +
+                                                "위치 & 권한 탭 하단에서 해당 권한을 허용해 주세요."
+                                            }
+                                            showTestResultDialog = true
                                         } catch (e: SecurityException) {
-                                            Toast.makeText(
-                                                context,
-                                                "⚠️ [가상 귀가 실패] '방해 금지 모드 권한'이 없어서 시스템 음량 모드를 제어할 수 없습니다. 상단의 권한 설정 버튼을 눌러 권한을 승인해 주세요.",
-                                                Toast.LENGTH_LONG
-                                            ).show()
+                                            testResultTitle = "⚠️ [가상 귀가 실패]"
+                                            testResultMessage = "시스템 음량 모드를 제어할 수 없습니다.\n\n" +
+                                                "'방해 금지 모드 권한'이 승인되지 않았습니다. " +
+                                                "위치 & 권한 탭에서 권한 승인을 완료해 주세요."
+                                            showTestResultDialog = true
                                         } catch (e: Exception) {
-                                            Toast.makeText(
-                                                context,
-                                                "오류 발생: ${e.message}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            testResultTitle = "오류 발생"
+                                            testResultMessage = "동작 중 다음과 같은 에러가 발생했습니다:\n${e.message}"
+                                            showTestResultDialog = true
                                         }
                                     }
                                 },
@@ -2182,6 +2203,24 @@ fun MainScreen(repository: SafeCallRepository) {
                         showMapPicker = false
                     }
                 }
+            )
+        }
+
+        if (showTestResultDialog) {
+            AlertDialog(
+                onDismissRequest = { showTestResultDialog = false },
+                title = { Text(testResultTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFF0F172A)) },
+                text = { Text(testResultMessage, fontSize = 14.sp, lineHeight = 20.sp, color = Color(0xFF334155)) },
+                confirmButton = {
+                    Button(
+                        onClick = { showTestResultDialog = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A))
+                    ) {
+                        Text("확인", color = Color.White)
+                    }
+                },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = Color.White
             )
         }
     }
