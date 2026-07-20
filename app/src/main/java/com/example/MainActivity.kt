@@ -59,6 +59,12 @@ import com.example.data.CallLogEntity
 import com.example.data.SafeCallRepository
 import com.example.data.EmergencyContact
 import com.example.ui.theme.MyApplicationTheme
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebChromeClient
+import android.webkit.JavascriptInterface
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.BorderStroke
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -122,6 +128,9 @@ fun MainScreen(repository: SafeCallRepository) {
     var officeLngInput by remember { mutableStateOf("") }
     var officeAddressInput by remember { mutableStateOf("") }
     var isEditingOffice by remember { mutableStateOf(false) }
+
+    var showMapPicker by remember { mutableStateOf(false) }
+    var mapTarget by remember { mutableStateOf("home") } // "home" or "office"
 
     var callLimitInput by remember { mutableStateOf("60") }
     var brightnessInput by remember { mutableStateOf("100") }
@@ -983,6 +992,34 @@ fun MainScreen(repository: SafeCallRepository) {
                                 Text("현재 위치를 우리집으로 등록하기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             }
 
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Button(
+                                onClick = {
+                                    mapTarget = "home"
+                                    showMapPicker = true
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFF1F5F9),
+                                    contentColor = Color(0xFF0F172A)
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Pick Location on Map",
+                                    tint = Color(0xFF0F172A)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "지도에서 직접 우리집 위치 선택하기 🗺️",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF0F172A)
+                                )
+                            }
+
                             Spacer(modifier = Modifier.height(16.dp))
                             HorizontalDivider(color = Color(0x11000000))
                             Spacer(modifier = Modifier.height(16.dp))
@@ -1327,6 +1364,34 @@ fun MainScreen(repository: SafeCallRepository) {
                                 Icon(imageVector = Icons.Default.LocationOn, contentDescription = "Get GPS Location")
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("현재 위치를 진동 위치로 등록하기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Button(
+                                onClick = {
+                                    mapTarget = "office"
+                                    showMapPicker = true
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFF1F5F9),
+                                    contentColor = Color(0xFF0F172A)
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Pick Location on Map",
+                                    tint = Color(0xFF0F172A)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "지도에서 직접 진동 위치 선택하기 🗺️",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF0F172A)
+                                )
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
@@ -2087,6 +2152,317 @@ fun MainScreen(repository: SafeCallRepository) {
                 } else {
                     items(callLogs) { log ->
                         LogItem(log = log)
+                    }
+                }
+            }
+        }
+
+        if (showMapPicker) {
+            val initialLat = if (mapTarget == "home") homeLatitude else officeLatitude
+            val initialLng = if (mapTarget == "home") homeLongitude else officeLongitude
+            MapPickerDialog(
+                initialLatitude = initialLat,
+                initialLongitude = initialLng,
+                onDismissRequest = { showMapPicker = false },
+                onConfirm = { lat, lng, address ->
+                    coroutineScope.launch {
+                        if (mapTarget == "home") {
+                            repository.saveHomeLocation(lat, lng, address.ifBlank { "안심 지정 우리집" })
+                            homeLatInput = lat.toString()
+                            homeLngInput = lng.toString()
+                            homeAddressInput = address.ifBlank { "우리집" }
+                            Toast.makeText(context, "우리집 위치가 지도 선택 위치로 정상 저장되었습니다!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            repository.saveOfficeLocation(lat, lng, address.ifBlank { "안심 지정 진동구역" })
+                            officeLatInput = lat.toString()
+                            officeLngInput = lng.toString()
+                            officeAddressInput = address.ifBlank { "회사/지정구역" }
+                            Toast.makeText(context, "안심 진동 위치가 지도 선택 위치로 정상 저장되었습니다!", Toast.LENGTH_SHORT).show()
+                        }
+                        showMapPicker = false
+                    }
+                }
+            )
+        }
+    }
+}
+
+class WebAppInterface(
+    private val context: Context,
+    private val onLocationSelected: (Double, Double, String) -> Unit
+) {
+    @JavascriptInterface
+    fun onLocationSelected(lat: Double, lng: Double, address: String) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            onLocationSelected(lat, lng, address)
+        }
+    }
+
+    @JavascriptInterface
+    fun showToast(message: String) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MapPickerDialog(
+    initialLatitude: Double,
+    initialLongitude: Double,
+    onDismissRequest: () -> Unit,
+    onConfirm: (Double, Double, String) -> Unit
+) {
+    var selectedLat by remember { mutableStateOf(initialLatitude) }
+    var selectedLng by remember { mutableStateOf(initialLongitude) }
+    var selectedAddress by remember { mutableStateOf("") }
+    
+    val startLat = if (initialLatitude == 0.0) 37.5665 else initialLatitude
+    val startLng = if (initialLongitude == 0.0) 126.9780 else initialLongitude
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f),
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.background,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "지도에서 위치 선택 🗺️",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 18.sp,
+                        color = Color(0xFF0F172A)
+                    )
+                    IconButton(onClick = onDismissRequest) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close Map")
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "지도를 탭하거나 핀을 드래그하여 정확한 위치를 지정하고 주소를 검색할 수 있습니다.",
+                    fontSize = 12.sp,
+                    color = Color(0xFF64748B),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(16.dp))
+                ) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            android.webkit.WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                webViewClient = android.webkit.WebViewClient()
+                                webChromeClient = android.webkit.WebChromeClient()
+                                
+                                addJavascriptInterface(
+                                    WebAppInterface(ctx) { lat, lng, addr ->
+                                        selectedLat = lat
+                                        selectedLng = lng
+                                        selectedAddress = addr
+                                    },
+                                    "AndroidInterface"
+                                )
+                                
+                                val mapHtml = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <meta charset="utf-8">
+                                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                                        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                                        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                                        <style>
+                                            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+                                            #map { height: 100vh; width: 100vw; }
+                                            .leaflet-control-attribution { display: none; }
+                                            #search-container {
+                                                position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1000;
+                                                background: white; padding: 4px; border-radius: 12px;
+                                                box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; align-items: center;
+                                                border: 1px solid #E2E8F0;
+                                            }
+                                            #search-input {
+                                                flex: 1; border: none; padding: 10px 12px; font-size: 14px; outline: none; border-radius: 8px;
+                                            }
+                                            #search-button {
+                                                background: #0F172A; color: white; border: none; padding: 10px 16px;
+                                                border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; margin-right: 4px;
+                                            }
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <div id="search-container">
+                                            <input type="text" id="search-input" placeholder="주소나 장소를 검색해보세요" onkeyup="if(event.keyCode==13) searchAddress()" />
+                                            <button id="search-button" onclick="searchAddress()">검색</button>
+                                        </div>
+                                        <div id="map"></div>
+                                        <script>
+                                            var map = L.map('map', { zoomControl: false }).setView([$startLat, $startLng], 16);
+                                            L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+                                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+                                            
+                                            var marker = L.marker([$startLat, $startLng], {draggable: true}).addTo(map);
+                                            
+                                            function reverseGeocode(lat, lng) {
+                                                fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng + '&accept-language=ko')
+                                                .then(response => response.json())
+                                                .then(data => {
+                                                    var address = data.display_name || "";
+                                                    var cleanAddress = address;
+                                                    if (address.indexOf("대한민국") === 0) {
+                                                        cleanAddress = address.replace(/^대한민국\s*,?\s*/, "").trim();
+                                                    }
+                                                    cleanAddress = cleanAddress.split(',').reverse().join(' ').replace(/\s+/g, ' ').trim();
+                                                    
+                                                    if (window.AndroidInterface) {
+                                                        window.AndroidInterface.onLocationSelected(lat, lng, cleanAddress);
+                                                    }
+                                                })
+                                                .catch(err => {
+                                                    if (window.AndroidInterface) {
+                                                        window.AndroidInterface.onLocationSelected(lat, lng, "");
+                                                    }
+                                                });
+                                            }
+
+                                            marker.on('dragend', function(e) {
+                                                var position = marker.getLatLng();
+                                                reverseGeocode(position.lat, position.lng);
+                                            });
+
+                                            map.on('click', function(e) {
+                                                marker.setLatLng(e.latlng);
+                                                reverseGeocode(e.latlng.lat, e.latlng.lng);
+                                            });
+
+                                            function searchAddress() {
+                                                var query = document.getElementById('search-input').value.trim();
+                                                if (!query) return;
+                                                fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(query) + '&limit=1&accept-language=ko')
+                                                .then(response => response.json())
+                                                .then(data => {
+                                                    if (data && data.length > 0) {
+                                                        var lat = parseFloat(data[0].lat);
+                                                        var lng = parseFloat(data[0].lon);
+                                                        var address = data[0].display_name;
+                                                        var cleanAddress = address;
+                                                        if (address.indexOf("대한민국") === 0) {
+                                                            cleanAddress = address.replace(/^대한민국\s*,?\s*/, "").trim();
+                                                        }
+                                                        cleanAddress = cleanAddress.split(',').reverse().join(' ').replace(/\s+/g, ' ').trim();
+
+                                                        map.setView([lat, lng], 16);
+                                                        marker.setLatLng([lat, lng]);
+                                                        
+                                                        if (window.AndroidInterface) {
+                                                            window.AndroidInterface.onLocationSelected(lat, lng, cleanAddress);
+                                                        }
+                                                    } else {
+                                                        if (window.AndroidInterface) {
+                                                            window.AndroidInterface.showToast("검색 결과가 없습니다.");
+                                                        }
+                                                    }
+                                                })
+                                                .catch(err => {
+                                                    if (window.AndroidInterface) {
+                                                        window.AndroidInterface.showToast("검색 중 오류가 발생했습니다.");
+                                                    }
+                                                });
+                                            }
+                                            
+                                            reverseGeocode($startLat, $startLng);
+                                        </script>
+                                    </body>
+                                    </html>
+                                """.trimIndent()
+                                loadDataWithBaseURL("https://openstreetmap.org", mapHtml, "text/html", "UTF-8", null)
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "선택된 위치 정보",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = Color(0xFF475569)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (selectedAddress.isNotEmpty()) selectedAddress else "지도 상의 지정 위치",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF0F172A),
+                            lineHeight = 16.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "위도: ${String.format(Locale.US, "%.5f", selectedLat)}, 경도: ${String.format(Locale.US, "%.5f", selectedLng)}",
+                            fontSize = 11.sp,
+                            color = Color(0xFF64748B)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("취소", color = Color(0xFF475569))
+                    }
+                    Button(
+                        onClick = {
+                            onConfirm(selectedLat, selectedLng, selectedAddress)
+                        },
+                        modifier = Modifier.weight(1.5f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("이 위치로 설정 완료", fontWeight = FontWeight.Bold)
                     }
                 }
             }
