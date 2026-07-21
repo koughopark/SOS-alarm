@@ -14,8 +14,8 @@ android {
     applicationId = "com.aistudio.safecallalert.pnvzt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 1 // 기기 및 구글 플레이스토어가 업데이트를 감지하는 내부 정수 버전 (정수값, 1씩 증가시킴)
+    versionName = "1.0.0" // 사용자에게 노출되는 시각적 버전명 (문자열)
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

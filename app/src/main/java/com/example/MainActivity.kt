@@ -1492,6 +1492,7 @@ fun MainScreen(repository: SafeCallRepository) {
             if (selectedTab == 1) {
                 item {
                     val hasAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission && hasNotificationPermission && hasOverlayPermission && hasWriteSettingsPermission
+                    val hasBasicAll = hasSmsPermission && hasPhoneStatePermission && hasLocationPermission && hasNotificationPermission && hasAnswerCallsPermission
                     val containerColor = if (hasAll) Color(0xFFE8F5E9) else Color(0xFFFEF2F2)
                     val borderColor = if (hasAll) Color(0xFFA5D6A7) else Color(0xFFFCA5A5)
                     val titleColor = if (hasAll) Color(0xFF0F5132) else Color(0xFF842029)
@@ -1506,247 +1507,159 @@ fun MainScreen(repository: SafeCallRepository) {
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                     ) {
                         Column(modifier = Modifier.padding(18.dp)) {
+                            // 1. 헤더 영역
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = if (hasAll) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                        tint = if (hasAll) Color(0xFF059669) else Color(0xFFDC2626),
-                                        contentDescription = "Status icon",
-                                        modifier = Modifier.size(26.dp)
+                                Icon(
+                                    imageVector = if (hasAll) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                    tint = if (hasAll) Color(0xFF059669) else Color(0xFFDC2626),
+                                    contentDescription = "Status icon",
+                                    modifier = Modifier.size(26.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "필수 연결 및 권한 현황",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 17.sp,
+                                        color = titleColor
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = "필수 연결 및 권한 현황",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp,
-                                            color = titleColor
-                                        )
-                                        Text(
-                                            text = statusText,
-                                            fontSize = 12.sp,
-                                            color = if (hasAll) Color(0xFF198754) else Color(0xFFDC3545)
-                                        )
-                                    }
+                                    Text(
+                                        text = statusText,
+                                        fontSize = 12.sp,
+                                        color = if (hasAll) Color(0xFF198754) else Color(0xFFDC3545)
+                                    )
                                 }
+                            }
 
-                                if (!hasAll) {
-                                    Button(
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                        onClick = {
-                                            // 1. Request overlay permission first if needed (Android 6.0+)
-                                            if (!hasOverlayPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                                try {
-                                                    val intent = Intent(
-                                                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                        Uri.parse("package:${context.packageName}")
-                                                    )
-                                                    context.startActivity(intent)
-                                                    Toast.makeText(context, "다른 앱 위에 표시 권한을 허용해 주세요!", Toast.LENGTH_SHORT).show()
-                                                } catch (e: Exception) {
-                                                    try {
-                                                        val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                                                        context.startActivity(intent)
-                                                    } catch (ex: Exception) {}
-                                                }
-                                            }
+                            Spacer(modifier = Modifier.height(14.dp))
+                            HorizontalDivider(color = Color(0x11000000))
+                            Spacer(modifier = Modifier.height(14.dp))
 
-                                            // 2. Request conventional runtime permissions
-                                            val permissions = mutableListOf(
-                                                Manifest.permission.SEND_SMS,
-                                                Manifest.permission.READ_PHONE_STATE,
-                                                Manifest.permission.VIBRATE,
-                                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                                Manifest.permission.ACCESS_COARSE_LOCATION
-                                            )
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                permissions.add(Manifest.permission.ANSWER_PHONE_CALLS)
-                                            }
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                                            }
-                                            permLauncher.launch(permissions.toTypedArray())
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                                        shape = RoundedCornerShape(12.dp)
+                            // 2. [그룹 1] 기본 시스템 권한 섹션
+                            Text(
+                                text = "📋 일반 시스템 권한 (기본 승인 대상)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF1E293B),
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+
+                            val basicPermissions = listOf(
+                                "1. 통화 상태 감지 권한" to hasPhoneStatePermission,
+                                "2. 보호자 안심 문자 발송 권한" to hasSmsPermission,
+                                "3. GPS 위치 정보 권한" to hasLocationPermission,
+                                "4. 원격 종료 제어 권한" to hasAnswerCallsPermission,
+                                "5. 알림 및 긴급 경보 권한" to hasNotificationPermission
+                            )
+
+                            basicPermissions.forEach { (name, isAllowed) ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = name,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFF475569)
+                                    )
+                                    Surface(
+                                        color = if (isAllowed) Color(0xFFE2F0D9) else Color(0xFFFEF3C7), // 허용: 연녹색, 미허용: 연노란색(Amber 100)
+                                        shape = RoundedCornerShape(6.dp)
                                     ) {
-                                        Text("권한 허용", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider(color = Color(0x11000000))
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Individual permission checklists
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("1. 통화 상태 감지 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                                Text(
-                                    text = if (hasPhoneStatePermission) "허용됨" else "미허용",
-                                    color = if (hasPhoneStatePermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("2. 보호자 안심 문자 발송 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                                Text(
-                                    text = if (hasSmsPermission) "허용됨" else "미허용",
-                                    color = if (hasSmsPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("3. GPS 위치 정보 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                                Text(
-                                    text = if (hasLocationPermission) "허용됨" else "미허용",
-                                    color = if (hasLocationPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("4. 원격 종료 제어 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                                Text(
-                                    text = if (hasAnswerCallsPermission) "허용됨" else "미허용",
-                                    color = if (hasAnswerCallsPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("5. 알림 및 긴급 경보 권한", fontSize = 13.sp, color = Color(0xFF475569))
-                                Text(
-                                    text = if (hasNotificationPermission) "허용됨" else "미허용",
-                                    color = if (hasNotificationPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("6. 다른 앱 위에 표시 권한 (필수)", fontSize = 13.sp, color = Color(0xFF475569))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = if (hasOverlayPermission) "허용됨" else "미허용",
-                                        color = if (hasOverlayPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
-                                    if (!hasOverlayPermission) {
-                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "[설정]",
-                                            color = Color(0xFF2563EB),
+                                            text = if (isAllowed) "허용됨" else "미허용",
+                                            color = if (isAllowed) Color(0xFF27AE60) else Color(0xFFD97706), // 허용: 녹색, 미허용: 어두운 노란색(Amber 600)
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp,
-                                            modifier = Modifier.clickable {
-                                                try {
-                                                    val intent = Intent(
-                                                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                        Uri.parse("package:${context.packageName}")
-                                                    )
-                                                    context.startActivity(intent)
-                                                } catch (e: Exception) {
-                                                    try {
-                                                        val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                                                        context.startActivity(intent)
-                                                    } catch (ex: Exception) {
-                                                        Toast.makeText(context, "다른 앱 위에 표시 설정창을 열 수 없습니다. 직접 기기 설정에서 허용해 주세요.", Toast.LENGTH_LONG).show()
-                                                    }
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("7. 화면 밝기 자동 조절 권한 (필수)", fontSize = 13.sp, color = Color(0xFF475569))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = if (hasWriteSettingsPermission) "허용됨" else "미허용",
-                                        color = if (hasWriteSettingsPermission) Color(0xFF059669) else Color(0xFFDC2626),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
-                                    if (!hasWriteSettingsPermission) {
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = "[설정]",
-                                            color = Color(0xFF2563EB),
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp,
-                                            modifier = Modifier.clickable {
-                                                try {
-                                                    val intent = Intent(
-                                                        android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS,
-                                                        Uri.parse("package:${context.packageName}")
-                                                    )
-                                                    context.startActivity(intent)
-                                                } catch (e: Exception) {
-                                                    try {
-                                                        val intent = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS)
-                                                        context.startActivity(intent)
-                                                    } catch (ex: Exception) {
-                                                        Toast.makeText(context, "화면 밝기 설정창을 열 수 없습니다. 직접 기기 설정에서 허용해 주세요.", Toast.LENGTH_LONG).show()
-                                                    }
-                                                }
-                                            }
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                         )
                                     }
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(14.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
                             HorizontalDivider(color = Color(0x11000000))
-                            Spacer(modifier = Modifier.height(14.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                            // 배터리 최적화 예외설정 바로가기 배치
+                            // 3. [그룹 2] 특수 시스템 권한 섹션 (UI 완전 통일)
+                            Text(
+                                text = "⚙️ 특수 시스템 권한 (개별 설정 필요)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF1E293B),
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+
                             val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                             val isBatteryOptimizationsIgnored = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 powerManager.isIgnoringBatteryOptimizations(context.packageName)
-                            } else {
+                             } else {
                                 true
+                             }
+
+                            val dndAccessNotGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val alertNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                                alertNotificationManager.isNotificationPolicyAccessGranted == false
+                            } else {
+                                false
                             }
 
-                            Button(
-                                onClick = {
+                            // 6) 다른 앱 위에 표시 권한 (필수)
+                            SpecialPermissionRow(
+                                name = "6. 다른 앱 위에 표시 권한 (필수)",
+                                isAllowed = hasOverlayPermission,
+                                onSetupClick = {
+                                    try {
+                                        val intent = Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        try {
+                                            val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                            context.startActivity(intent)
+                                        } catch (ex: Exception) {
+                                            Toast.makeText(context, "다른 앱 위에 표시 설정창을 열 수 없습니다. 직접 기기 설정에서 허용해 주세요.", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                            )
+
+                            // 7) 화면 밝기 자동 조절 권한 (필수)
+                            SpecialPermissionRow(
+                                name = "7. 화면 밝기 자동 조절 권한 (필수)",
+                                isAllowed = hasWriteSettingsPermission,
+                                onSetupClick = {
+                                    try {
+                                        val intent = Intent(
+                                            android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        try {
+                                            val intent = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS)
+                                            context.startActivity(intent)
+                                        } catch (ex: Exception) {
+                                            Toast.makeText(context, "화면 밝기 설정창을 열 수 없습니다. 직접 기기 설정에서 허용해 주세요.", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                            )
+
+                            // 8) 배터리 최적화 제외 설정 (필수)
+                            SpecialPermissionRow(
+                                name = "8. 배터리 최적화 제외 설정 (필수)",
+                                isAllowed = isBatteryOptimizationsIgnored,
+                                onSetupClick = {
                                     var succeeded = false
-                                    // 1. Try requesting direct bypass prompt
                                     try {
                                         val intent = Intent().apply {
                                             action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
@@ -1759,7 +1672,6 @@ fun MainScreen(repository: SafeCallRepository) {
                                     }
 
                                     if (!succeeded) {
-                                        // 2. Fallback to direct App Info Details settings (Highly supported on Android 12-16)
                                         try {
                                             val intent = Intent().apply {
                                                 action = android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
@@ -1778,7 +1690,6 @@ fun MainScreen(repository: SafeCallRepository) {
                                     }
 
                                     if (!succeeded) {
-                                        // 3. Fallback to general background optimize listing
                                         try {
                                             val intent = Intent().apply {
                                                 action = android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
@@ -1798,69 +1709,75 @@ fun MainScreen(repository: SafeCallRepository) {
                                     if (!succeeded) {
                                         Toast.makeText(context, "배터리 설정을 편리하게 열 수 없었습니다. 기기 설정에서 배터리 최적화 제외를 수동 적용하세요.", Toast.LENGTH_SHORT).show()
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isBatteryOptimizationsIgnored) Color(0xFF059669) else Color(0xFFD97706)
-                                ),
-                                modifier = Modifier.fillMaxWidth().height(48.dp),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isBatteryOptimizationsIgnored) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                    tint = Color.White,
-                                    contentDescription = "Battery Optimization setting"
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isBatteryOptimizationsIgnored) "배터리 최적화 제외 설정 완료" else "배터리 최적화 제외 설정하러 가기",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = Color.White
-                                )
-                            }
+                                }
+                            )
 
-                            // Special DND helper if API level constraints apply
-                            val dndAccessNotGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                val alertNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                                alertNotificationManager.isNotificationPolicyAccessGranted == false
-                            } else {
-                                false
-                            }
-
-                            if (dndAccessNotGranted) {
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Card(
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF7ED)),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFFED7AA), RoundedCornerShape(12.dp))
-                                ) {
-                                    Column(modifier = Modifier.padding(10.dp)) {
-                                        Text(
-                                            text = "⚠️ 중요 안내: 기기가 '무음 모드'일 경우, 앱이 무음을 강제로 해제하려면 '방해 금지 모드 허용 권한'이 필수적으로 필요합니다.",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFFC2410C),
-                                            lineHeight = 15.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Button(
-                                            onClick = {
-                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                                    try {
-                                                        val intent = Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-                                                        context.startActivity(intent)
-                                                    } catch (e: Exception) {
-                                                        Toast.makeText(context, "권한 설정 창을 열지 못했습니다. 직접 기기 설정에서 '방해 금지 제어 허용'을 검색해 활성화 해주세요.", Toast.LENGTH_LONG).show()
-                                                    }
-                                                }
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                            modifier = Modifier.height(32.dp),
-                                            shape = RoundedCornerShape(8.dp)
-                                        ) {
-                                            Text("권한 설정 바로 가기", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            // 9) 무음 해제 권한 (선택)
+                            SpecialPermissionRow(
+                                name = "9. 무음 해제 권한 (선택)",
+                                isAllowed = !dndAccessNotGranted,
+                                onSetupClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        try {
+                                            val intent = Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "권한 설정 창을 열지 못했습니다. 직접 기기 설정에서 '방해 금지 제어 허용'을 검색해 활성화 해주세요.", Toast.LENGTH_LONG).show()
                                         }
+                                    } else {
+                                        Toast.makeText(context, "이 기기 버전에서는 지원하지 않거나 설정할 필요가 없습니다.", Toast.LENGTH_SHORT).show()
                                     }
+                                }
+                            )
+
+                            // 일반 권한이 모두 부여되지 않았다면, 전체 권한 목록 최하단에 일괄 허용 버튼 배치
+                            if (!hasBasicAll) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFF59E0B), // 노란색(Amber) 계열로 변경하여 빨간색 제거
+                                        contentColor = Color.White
+                                    ),
+                                    onClick = {
+                                        // 1. Request overlay permission first if needed (Android 6.0+)
+                                        if (!hasOverlayPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                            try {
+                                                val intent = Intent(
+                                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    Uri.parse("package:${context.packageName}")
+                                                )
+                                                context.startActivity(intent)
+                                                Toast.makeText(context, "다른 앱 위에 표시 권한을 허용해 주세요!", Toast.LENGTH_SHORT).show()
+                                            } catch (e: Exception) {
+                                                try {
+                                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                                    context.startActivity(intent)
+                                                } catch (ex: Exception) {}
+                                            }
+                                        }
+
+                                        // 2. Request conventional runtime permissions
+                                        val permissions = mutableListOf(
+                                            Manifest.permission.SEND_SMS,
+                                            Manifest.permission.READ_PHONE_STATE,
+                                            Manifest.permission.VIBRATE,
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                            permissions.add(Manifest.permission.ANSWER_PHONE_CALLS)
+                                        }
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                        permLauncher.launch(permissions.toTypedArray())
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("기본 시스템 권한 일괄 허용하기 🔓", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -2682,6 +2599,46 @@ fun ContactEditForm(
             ) {
                 Text("취소", color = Color(0xFF475569))
             }
+        }
+    }
+}
+
+@Composable
+fun SpecialPermissionRow(
+    name: String,
+    isAllowed: Boolean,
+    onSetupClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = name,
+            fontSize = 13.sp,
+            color = Color(0xFF475569),
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Surface(
+            color = if (isAllowed) Color(0xFFE2F0D9) else Color(0xFFFEF3C7), // 허용: 연녹색, 미허용(설정): 연노란색(Amber 100)
+            shape = RoundedCornerShape(6.dp),
+            modifier = if (!isAllowed) {
+                Modifier.clickable { onSetupClick() }
+            } else {
+                Modifier
+            }
+        ) {
+            Text(
+                text = if (isAllowed) "허용됨" else "설정",
+                color = if (isAllowed) Color(0xFF27AE60) else Color(0xFFD97706), // 허용: 녹색, 미허용: 어두운 노란색(Amber 600)
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
         }
     }
 }
