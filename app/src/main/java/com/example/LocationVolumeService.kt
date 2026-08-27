@@ -84,25 +84,29 @@ class LocationVolumeService : Service() {
 
     private fun checkProximity(currentLocation: Location) {
         serviceScope.launch {
+            val nowStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.KOREA).format(java.util.Date())
+
             // 1. Process Home Location (Auto Normal Volume Ringer)
             val homeEnabled = repository.isHomeAutoRingerEnabledFlow.first()
             if (homeEnabled) {
                 val homeLat = repository.homeLatitudeFlow.first()
                 val homeLng = repository.homeLongitudeFlow.first()
+                val homeRadius = repository.homeRadiusFlow.first().toFloat()
                 if (homeLat != 0.0 && homeLng != 0.0) {
                     val homeLocation = Location("home").apply {
                         latitude = homeLat
                         longitude = homeLng
                     }
                     val distance = currentLocation.distanceTo(homeLocation)
-                    Log.d("LocationService", "Distance inside background monitor to home: $distance m")
+                    val distanceInt = distance.toInt()
+                    Log.d("LocationService", "Distance to home: ${distanceInt}m (radius: ${homeRadius}m)")
 
-                    if (distance <= 50f) {
+                    if (distance <= homeRadius) {
                         if (!hasTriggeredAtHome) {
                             hasTriggeredAtHome = true
-                            triggerVolumeNormalization()
+                            triggerVolumeNormalization(distanceInt, nowStr)
                         }
-                    } else if (distance > 100f) {
+                    } else if (distance > (homeRadius + 50f)) {
                         if (hasTriggeredAtHome) {
                             hasTriggeredAtHome = false
                             updateNotificationText("안심 귀가 모드: 집 밖 (볼륨 자동 해제 대기 중)")
@@ -116,23 +120,25 @@ class LocationVolumeService : Service() {
             if (officeEnabled) {
                 val officeLat = repository.officeLatitudeFlow.first()
                 val officeLng = repository.officeLongitudeFlow.first()
+                val officeRadius = repository.officeRadiusFlow.first().toFloat()
                 if (officeLat != 0.0 && officeLng != 0.0) {
                     val officeLocation = Location("office").apply {
                         latitude = officeLat
                         longitude = officeLng
                     }
                     val distance = currentLocation.distanceTo(officeLocation)
-                    Log.d("LocationService", "Distance inside background monitor to office: $distance m")
+                    val distanceInt = distance.toInt()
+                    Log.d("LocationService", "Distance to office: ${distanceInt}m (radius: ${officeRadius}m)")
 
-                    if (distance <= 50f) {
+                    if (distance <= officeRadius) {
                         if (!hasTriggeredAtOffice) {
                             hasTriggeredAtOffice = true
-                            triggerVibrationSetting()
+                            triggerVibrationSetting(distanceInt, nowStr)
                         }
-                    } else if (distance > 100f) {
+                    } else if (distance > (officeRadius + 50f)) {
                         if (hasTriggeredAtOffice) {
                             hasTriggeredAtOffice = false
-                            updateNotificationText("회사 진동 모드: 특정지점 밖 (진동 자동 전환 대기 중)")
+                            triggerOfficeExitNormalization(distanceInt, nowStr)
                         }
                     }
                 }
@@ -140,7 +146,7 @@ class LocationVolumeService : Service() {
         }
     }
 
-    private fun triggerVibrationSetting() {
+    private fun triggerVibrationSetting(distanceMeters: Int, timestampStr: String) {
         runOnMainThread {
             try {
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -149,12 +155,16 @@ class LocationVolumeService : Service() {
                 audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
                 
                 serviceScope.launch {
-                    val officeAddress = repository.officeAddressFlow.first().ifBlank { "지정구역" }
+                    val officeAddress = repository.officeAddressFlow.first().ifBlank { "진동 지정 구역" }
+                    // Log format matching user specification
+                    val logMsg = "[$timestampStr] [위치 감지] $officeAddress 진입 (거리 ${distanceMeters}m) ➔ 진동 모드로 자동 전환되었습니다."
+                    repository.addLog(0L, logMsg)
+                    
                     runOnMainThread {
                         updateNotificationText("위치 지정 진동 전환: $officeAddress 진입 완료!")
                         Toast.makeText(
                             applicationContext,
-                            "📳 [$officeAddress 진입] 벨소리가 해제되고 진동 모드로 자동 전환되었습니다!",
+                            "📳 [$officeAddress 진입 (거리 ${distanceMeters}m)] 벨소리가 해제되고 진동 모드로 자동 전환되었습니다!",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -172,7 +182,34 @@ class LocationVolumeService : Service() {
         }
     }
 
-    private fun triggerVolumeNormalization() {
+    private fun triggerOfficeExitNormalization(distanceMeters: Int, timestampStr: String) {
+        runOnMainThread {
+            try {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                if (audioManager.ringerMode != AudioManager.RINGER_MODE_NORMAL) {
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                }
+                serviceScope.launch {
+                    val officeAddress = repository.officeAddressFlow.first().ifBlank { "진동 지정 구역" }
+                    val logMsg = "[$timestampStr] [위치 자동 감지] $officeAddress 벗어남 (거리 ${distanceMeters}m) ➔ 벨소리 모드로 자동 복구되었습니다."
+                    repository.addLog(0L, logMsg)
+                    
+                    runOnMainThread {
+                        updateNotificationText("진동 구역 벗어남: 벨소리 모드 자동 복구")
+                        Toast.makeText(
+                            applicationContext,
+                            "🔔 [$officeAddress 벗어남 (거리 ${distanceMeters}m)] 벨소리 모드로 자동 복구되었습니다.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("LocationService", "Failed to restore ringer on office exit", e)
+            }
+        }
+    }
+
+    private fun triggerVolumeNormalization(distanceMeters: Int, timestampStr: String) {
         runOnMainThread {
             try {
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -188,6 +225,11 @@ class LocationVolumeService : Service() {
                 serviceScope.launch {
                     val percent = repository.getSafeHomeBrightnessPercent()
                     val brightnessVal = ((percent.coerceIn(1, 100) * 255) / 100).coerceIn(1, 255)
+
+                    // Log format matching user specification
+                    val logMsg = "[$timestampStr] [위치 감지] 우리집 도착 확인 (거리 ${distanceMeters}m) ➔ 벨소리 모드로 자동 복구되었습니다."
+                    repository.addLog(0L, logMsg)
+
                     runOnMainThread {
                         try {
                             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.System.canWrite(applicationContext)) {
@@ -215,7 +257,7 @@ class LocationVolumeService : Service() {
                         
                         Toast.makeText(
                             applicationContext,
-                            "🔔☀️ [안심 귀가] 집 반경 50m 이내에 도달하여 벨소리와 화면 밝기가 ${percent}%로 자동 설정되었습니다!",
+                            "🔔☀️ [안심 귀가] 집 근처 도달(거리 ${distanceMeters}m)! 벨소리와 화면 밝기가 ${percent}%로 자동 복구되었습니다!",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -240,12 +282,30 @@ class LocationVolumeService : Service() {
     }
 
     private fun createNotification(content: String): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("실시간 안심 귀가 감지 서비스")
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val pendingIntent = if (launchIntent != null) {
+            android.app.PendingIntent.getActivity(
+                this,
+                0,
+                launchIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+        } else null
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("실시간 안심 귀가 & 비상 감지 (상시 보호 중)")
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
-            .build()
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+
+        if (pendingIntent != null) {
+            builder.setContentIntent(pendingIntent)
+        }
+
+        return builder.build()
     }
 
     private fun createNotificationChannel() {
@@ -256,7 +316,7 @@ class LocationVolumeService : Service() {
                 NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
+            manager?.createNotificationChannel(serviceChannel)
         }
     }
 
@@ -264,10 +324,18 @@ class LocationVolumeService : Service() {
         Handler(Looper.getMainLooper()).post(block)
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d("LocationService", "onTaskRemoved triggered. Re-triggering Watchdog to keep service running...")
+        WatchdogWorker.enqueueImmediate(applicationContext)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         locationManager.removeUpdates(locationListener)
         serviceScope.cancel()
+        Log.d("LocationService", "onDestroy triggered. Enqueuing watchdog check...")
+        WatchdogWorker.enqueueImmediate(applicationContext)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -95,6 +95,9 @@ class SafeCallRepository(context: Context) {
     val homeAddressFlow: Flow<String> = settingDao.getSettingFlow("home_address")
         .map { it?.value ?: "" }
 
+    val homeRadiusFlow: Flow<Int> = settingDao.getSettingFlow("home_radius_meters")
+        .map { it?.value?.toIntOrNull() ?: 200 }
+
     val isHomeAutoRingerEnabledFlow: Flow<Boolean> = settingDao.getSettingFlow("home_auto_ringer_enabled")
         .map { it?.value?.toBoolean() ?: false }
 
@@ -102,6 +105,11 @@ class SafeCallRepository(context: Context) {
         settingDao.insertSetting(SettingEntity("home_latitude", latitude.toString()))
         settingDao.insertSetting(SettingEntity("home_longitude", longitude.toString()))
         settingDao.insertSetting(SettingEntity("home_address", address))
+    }
+
+    suspend fun saveHomeRadius(radiusMeters: Int) {
+        val safeRadius = radiusMeters.coerceIn(50, 3000)
+        settingDao.insertSetting(SettingEntity("home_radius_meters", safeRadius.toString()))
     }
 
     suspend fun saveHomeAutoRingerEnabled(enabled: Boolean) {
@@ -118,6 +126,9 @@ class SafeCallRepository(context: Context) {
     val officeAddressFlow: Flow<String> = settingDao.getSettingFlow("office_address")
         .map { it?.value ?: "" }
 
+    val officeRadiusFlow: Flow<Int> = settingDao.getSettingFlow("office_radius_meters")
+        .map { it?.value?.toIntOrNull() ?: 200 }
+
     val isOfficeAutoVibrateEnabledFlow: Flow<Boolean> = settingDao.getSettingFlow("office_auto_vibrate_enabled")
         .map { it?.value?.toBoolean() ?: false }
 
@@ -125,6 +136,11 @@ class SafeCallRepository(context: Context) {
         settingDao.insertSetting(SettingEntity("office_latitude", latitude.toString()))
         settingDao.insertSetting(SettingEntity("office_longitude", longitude.toString()))
         settingDao.insertSetting(SettingEntity("office_address", address))
+    }
+
+    suspend fun saveOfficeRadius(radiusMeters: Int) {
+        val safeRadius = radiusMeters.coerceIn(50, 3000)
+        settingDao.insertSetting(SettingEntity("office_radius_meters", safeRadius.toString()))
     }
 
     suspend fun saveOfficeAutoVibrateEnabled(enabled: Boolean) {

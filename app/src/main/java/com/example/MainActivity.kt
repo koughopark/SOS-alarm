@@ -104,11 +104,13 @@ fun MainScreen(repository: SafeCallRepository) {
     val homeLatitude by repository.homeLatitudeFlow.collectAsState(initial = 0.0)
     val homeLongitude by repository.homeLongitudeFlow.collectAsState(initial = 0.0)
     val homeAddress by repository.homeAddressFlow.collectAsState(initial = "")
+    val homeRadius by repository.homeRadiusFlow.collectAsState(initial = 200)
     val isHomeAutoRingerEnabled by repository.isHomeAutoRingerEnabledFlow.collectAsState(initial = false)
 
     val officeLatitude by repository.officeLatitudeFlow.collectAsState(initial = 0.0)
     val officeLongitude by repository.officeLongitudeFlow.collectAsState(initial = 0.0)
     val officeAddress by repository.officeAddressFlow.collectAsState(initial = "")
+    val officeRadius by repository.officeRadiusFlow.collectAsState(initial = 200)
     val isOfficeAutoVibrateEnabled by repository.isOfficeAutoVibrateEnabledFlow.collectAsState(initial = false)
 
     val callLimitMinutes by repository.callLimitMinutesFlow.collectAsState(initial = 60)
@@ -122,11 +124,13 @@ fun MainScreen(repository: SafeCallRepository) {
     var homeLatInput by remember { mutableStateOf("") }
     var homeLngInput by remember { mutableStateOf("") }
     var homeAddressInput by remember { mutableStateOf("") }
+    var homeRadiusInput by remember { mutableStateOf("200") }
     var isEditingHome by remember { mutableStateOf(false) }
 
     var officeLatInput by remember { mutableStateOf("") }
     var officeLngInput by remember { mutableStateOf("") }
     var officeAddressInput by remember { mutableStateOf("") }
+    var officeRadiusInput by remember { mutableStateOf("200") }
     var isEditingOffice by remember { mutableStateOf(false) }
 
     var showMapPicker by remember { mutableStateOf(false) }
@@ -142,6 +146,29 @@ fun MainScreen(repository: SafeCallRepository) {
 
     LaunchedEffect(safeHomeBrightnessPercent) {
         brightnessInput = safeHomeBrightnessPercent.toString()
+    }
+
+    LaunchedEffect(homeRadius) {
+        homeRadiusInput = homeRadius.toString()
+    }
+
+    LaunchedEffect(officeRadius) {
+        officeRadiusInput = officeRadius.toString()
+    }
+
+    // Check for overlap between Home and Office geofence regions
+    val locationDistanceBetween: Float? = remember(homeLatitude, homeLongitude, officeLatitude, officeLongitude) {
+        if (homeLatitude != 0.0 && homeLongitude != 0.0 && officeLatitude != 0.0 && officeLongitude != 0.0) {
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(homeLatitude, homeLongitude, officeLatitude, officeLongitude, results)
+            results[0]
+        } else null
+    }
+
+    val isOverlapDetected: Boolean = remember(locationDistanceBetween, homeRadius, officeRadius) {
+        if (locationDistanceBetween != null) {
+            locationDistanceBetween < (homeRadius + officeRadius)
+        } else false
     }
 
     // Sync form inputs when DB values load
@@ -272,6 +299,7 @@ fun MainScreen(repository: SafeCallRepository) {
     // Trigger initial permission assessment
     LaunchedEffect(key1 = true) {
         updatePermissions()
+        WatchdogWorker.enqueuePeriodic(context)
     }
 
     // Refresh permissions automatically when user returns from settings screen
@@ -280,6 +308,7 @@ fun MainScreen(repository: SafeCallRepository) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 updatePermissions()
+                WatchdogWorker.enqueuePeriodic(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -855,6 +884,47 @@ fun MainScreen(repository: SafeCallRepository) {
 
             // C. 실시간 안심 귀가 무음 해제 지오펜스
             if (selectedTab == 1) {
+                if (isOverlapDetected && locationDistanceBetween != null) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.5.dp, Color(0xFFEF4444), RoundedCornerShape(20.dp)),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Warning",
+                                    tint = Color(0xFFDC2626),
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "⚠️ 위치 반경 겹침(충돌) 주의",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = Color(0xFF991B1B)
+                                    )
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = "우리집과 진동구역 간 거리: 약 ${locationDistanceBetween.toInt()}m (두 반경의 합계: ${homeRadius + officeRadius}m)\n두 구역이 겹쳐 벨소리와 진동이 충돌할 수 있으니 반경(m)을 줄여주세요.",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFFB91C1C),
+                                        lineHeight = 16.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp)),
@@ -1012,17 +1082,103 @@ fun MainScreen(repository: SafeCallRepository) {
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.LocationOn,
-                                    contentDescription = "Pick Location on Map",
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search Address",
                                     tint = Color(0xFF0F172A)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "지도에서 직접 우리집 위치 선택하기 🗺️",
+                                    text = "주소 검색으로 우리집 위치 지정하기 🔍",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
                                     color = Color(0xFF0F172A)
                                 )
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            HorizontalDivider(color = Color(0x11000000))
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Home Radius Setting
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Radius Icon",
+                                    tint = Color(0xFFD97706),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "우리집 감지 반경(거리) 설정",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF0F172A)
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "💡 아파트/주택 실내 GPS 오차를 감안하여 150m ~ 300m 설정을 권장합니다. (기본값: 200m)",
+                                fontSize = 11.sp,
+                                color = Color(0xFF64748B),
+                                lineHeight = 15.sp
+                            )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = homeRadiusInput,
+                                    onValueChange = { input ->
+                                        if (input.all { it.isDigit() }) {
+                                            homeRadiusInput = input
+                                        }
+                                    },
+                                    label = { Text("우리집 인식 반경 (미터 m)") },
+                                    placeholder = { Text("200") },
+                                    suffix = { Text("m", color = Color(0xFF64748B), fontSize = 13.sp) },
+                                    modifier = Modifier.weight(1.5f),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFFF59E0B),
+                                        focusedLabelColor = Color(0xFFF59E0B)
+                                    )
+                                )
+
+                                Button(
+                                    onClick = {
+                                        val radiusVal = homeRadiusInput.toIntOrNull()
+                                        if (radiusVal == null || radiusVal < 50 || radiusVal > 3000) {
+                                            Toast.makeText(context, "50m ~ 3000m 사이의 올바른 반경 거리를 입력해주세요.", Toast.LENGTH_SHORT).show()
+                                            return@Button
+                                        }
+                                        coroutineScope.launch {
+                                            repository.saveHomeRadius(radiusVal)
+                                            if (homeLatitude != 0.0 && homeLongitude != 0.0 && officeLatitude != 0.0 && officeLongitude != 0.0) {
+                                                val results = FloatArray(1)
+                                                android.location.Location.distanceBetween(homeLatitude, homeLongitude, officeLatitude, officeLongitude, results)
+                                                val dist = results[0].toInt()
+                                                if (dist < (radiusVal + officeRadius)) {
+                                                    Toast.makeText(context, "⚠️ 경고: 우리집과 진동구역 반경이 겹칩니다! (두 지점 거리: ${dist}m / 반경 합계: ${radiusVal + officeRadius}m). 벨소리/진동 충돌 방지를 위해 반경을 줄여주세요.", Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    Toast.makeText(context, "우리집 감지 반경이 ${radiusVal}m로 안전하게 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } else {
+                                                Toast.makeText(context, "우리집 감지 반경이 ${radiusVal}m로 안전하게 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                    modifier = Modifier.height(56.dp).weight(1f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("반경 저장", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
                             }
 
                             Spacer(modifier = Modifier.height(16.dp))
@@ -1386,17 +1542,103 @@ fun MainScreen(repository: SafeCallRepository) {
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.LocationOn,
-                                    contentDescription = "Pick Location on Map",
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search Address",
                                     tint = Color(0xFF0F172A)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "지도에서 직접 진동 위치 선택하기 🗺️",
+                                    text = "주소 검색으로 진동 위치 지정하기 🔍",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
                                     color = Color(0xFF0F172A)
                                 )
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            HorizontalDivider(color = Color(0x11000000))
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Office Radius Setting
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = "Radius Icon",
+                                    tint = Color(0xFF7C3AED),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "진동 구역 감지 반경(거리) 설정",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF0F172A)
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "💡 사무실/건물 실내 GPS 오차를 감안하여 150m ~ 300m 설정을 권장합니다. (기본값: 200m)",
+                                fontSize = 11.sp,
+                                color = Color(0xFF64748B),
+                                lineHeight = 15.sp
+                            )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = officeRadiusInput,
+                                    onValueChange = { input ->
+                                        if (input.all { it.isDigit() }) {
+                                            officeRadiusInput = input
+                                        }
+                                    },
+                                    label = { Text("진동 구역 인식 반경 (미터 m)") },
+                                    placeholder = { Text("200") },
+                                    suffix = { Text("m", color = Color(0xFF64748B), fontSize = 13.sp) },
+                                    modifier = Modifier.weight(1.5f),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFF8B5CF6),
+                                        focusedLabelColor = Color(0xFF8B5CF6)
+                                    )
+                                )
+
+                                Button(
+                                    onClick = {
+                                        val radiusVal = officeRadiusInput.toIntOrNull()
+                                        if (radiusVal == null || radiusVal < 50 || radiusVal > 3000) {
+                                            Toast.makeText(context, "50m ~ 3000m 사이의 올바른 반경 거리를 입력해주세요.", Toast.LENGTH_SHORT).show()
+                                            return@Button
+                                        }
+                                        coroutineScope.launch {
+                                            repository.saveOfficeRadius(radiusVal)
+                                            if (homeLatitude != 0.0 && homeLongitude != 0.0 && officeLatitude != 0.0 && officeLongitude != 0.0) {
+                                                val results = FloatArray(1)
+                                                android.location.Location.distanceBetween(homeLatitude, homeLongitude, officeLatitude, officeLongitude, results)
+                                                val dist = results[0].toInt()
+                                                if (dist < (radiusVal + homeRadius)) {
+                                                    Toast.makeText(context, "⚠️ 경고: 진동구역과 우리집 반경이 겹칩니다! (두 지점 거리: ${dist}m / 반경 합계: ${radiusVal + homeRadius}m). 벨소리/진동 충돌 방지를 위해 반경을 줄여주세요.", Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    Toast.makeText(context, "진동 구역 감지 반경이 ${radiusVal}m로 안전하게 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } else {
+                                                Toast.makeText(context, "진동 구역 감지 반경이 ${radiusVal}m로 안전하게 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                                    modifier = Modifier.height(56.dp).weight(1f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("반경 저장", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
@@ -1726,6 +1968,70 @@ fun MainScreen(repository: SafeCallRepository) {
                                         }
                                     } else {
                                         Toast.makeText(context, "이 기기 버전에서는 지원하지 않거나 설정할 필요가 없습니다.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+
+                            // 10) 365일 상시 가동 / 절전 및 권한 회수 방지 설정 (필수 권장)
+                            SpecialPermissionRow(
+                                name = "10. 절전/권한회수 방지 (365일 상시가동)",
+                                isAllowed = isBatteryOptimizationsIgnored,
+                                onSetupClick = {
+                                    var opened = false
+                                    // 1. Try Unused App Restrictions / Auto Revoke Intent (Android 11+)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        try {
+                                            val intent = Intent(Intent.ACTION_AUTO_REVOKE_PERMISSIONS).apply {
+                                                data = Uri.parse("package:${context.packageName}")
+                                            }
+                                            context.startActivity(intent)
+                                            Toast.makeText(
+                                                context,
+                                                "💡 '사용하지 않는 앱 권한 삭제'를 [해제/비활성화]하고, '배터리' 항목을 '제한 없음'으로 설정해 주세요.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            opened = true
+                                        } catch (e: Exception) {
+                                            Log.e("MainActivity", "Auto revoke intent failed", e)
+                                        }
+                                    }
+
+                                    // 2. Try Samsung Device Care (Background Usage Limits)
+                                    if (!opened && Build.MANUFACTURER.contains("samsung", ignoreCase = true)) {
+                                        try {
+                                            val intent = Intent().apply {
+                                                component = android.content.ComponentName(
+                                                    "com.samsung.android.lool",
+                                                    "com.samsung.android.sm.battery.ui.BatteryActivity"
+                                                )
+                                            }
+                                            context.startActivity(intent)
+                                            Toast.makeText(
+                                                context,
+                                                "💡 삼성 디바이스 케어가 열렸습니다.\n'백그라운드 사용 제한' -> '절전 예외 앱'에 이 앱을 추가해 주세요!",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            opened = true
+                                        } catch (e: Exception) {
+                                            Log.e("MainActivity", "Samsung device care intent failed", e)
+                                        }
+                                    }
+
+                                    // 3. Fallback to App Details Settings
+                                    if (!opened) {
+                                        try {
+                                            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                                data = Uri.fromParts("package", context.packageName, null)
+                                            }
+                                            context.startActivity(intent)
+                                            Toast.makeText(
+                                                context,
+                                                "💡 앱 설정 화면입니다.\n1. '사용하지 않는 앱 권한 삭제' OFF\n2. '배터리' -> '제한 없음'으로 변경해 주세요.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "기기 설정 -> 애플리케이션 -> 이 앱에서 배터리 제한 없음을 설정해 주세요.", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
                             )
@@ -2098,24 +2404,28 @@ fun MainScreen(repository: SafeCallRepository) {
         if (showMapPicker) {
             val initialLat = if (mapTarget == "home") homeLatitude else officeLatitude
             val initialLng = if (mapTarget == "home") homeLongitude else officeLongitude
-            MapPickerDialog(
+            val targetName = if (mapTarget == "home") "우리집" else "진동 위치"
+            AddressSearchDialog(
+                targetTitle = targetName,
                 initialLatitude = initialLat,
                 initialLongitude = initialLng,
                 onDismissRequest = { showMapPicker = false },
                 onConfirm = { lat, lng, address ->
                     coroutineScope.launch {
                         if (mapTarget == "home") {
-                            repository.saveHomeLocation(lat, lng, address.ifBlank { "안심 지정 우리집" })
+                            val addr = address.ifBlank { "안심 지정 우리집" }
+                            repository.saveHomeLocation(lat, lng, addr)
                             homeLatInput = lat.toString()
                             homeLngInput = lng.toString()
-                            homeAddressInput = address.ifBlank { "우리집" }
-                            Toast.makeText(context, "우리집 위치가 지도 선택 위치로 정상 저장되었습니다!", Toast.LENGTH_SHORT).show()
+                            homeAddressInput = addr
+                            Toast.makeText(context, "우리집 위치가 성공적으로 자동 지정되었습니다!", Toast.LENGTH_SHORT).show()
                         } else {
-                            repository.saveOfficeLocation(lat, lng, address.ifBlank { "안심 지정 진동구역" })
+                            val addr = address.ifBlank { "안심 지정 진동구역" }
+                            repository.saveOfficeLocation(lat, lng, addr)
                             officeLatInput = lat.toString()
                             officeLngInput = lng.toString()
-                            officeAddressInput = address.ifBlank { "회사/지정구역" }
-                            Toast.makeText(context, "안심 진동 위치가 지도 선택 위치로 정상 저장되었습니다!", Toast.LENGTH_SHORT).show()
+                            officeAddressInput = addr
+                            Toast.makeText(context, "진동 위치가 성공적으로 자동 지정되었습니다!", Toast.LENGTH_SHORT).show()
                         }
                         showMapPicker = false
                     }
@@ -2143,39 +2453,118 @@ fun MainScreen(repository: SafeCallRepository) {
     }
 }
 
-class WebAppInterface(
-    private val context: Context,
-    private val onLocationSelected: (Double, Double, String) -> Unit
-) {
-    @JavascriptInterface
-    fun onLocationSelected(lat: Double, lng: Double, address: String) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            onLocationSelected(lat, lng, address)
-        }
-    }
-
-    @JavascriptInterface
-    fun showToast(message: String) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-}
+data class AddressCandidate(
+    val title: String,
+    val fullAddress: String,
+    val latitude: Double,
+    val longitude: Double
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MapPickerDialog(
+fun AddressSearchDialog(
+    targetTitle: String,
     initialLatitude: Double,
     initialLongitude: Double,
     onDismissRequest: () -> Unit,
     onConfirm: (Double, Double, String) -> Unit
 ) {
-    var selectedLat by remember { mutableStateOf(initialLatitude) }
-    var selectedLng by remember { mutableStateOf(initialLongitude) }
-    var selectedAddress by remember { mutableStateOf("") }
-    
-    val startLat = if (initialLatitude == 0.0) 37.5665 else initialLatitude
-    val startLng = if (initialLongitude == 0.0) 126.9780 else initialLongitude
+    val context = LocalContext.current
+    var queryText by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf<List<AddressCandidate>>(emptyList()) }
+    var selectedCandidate by remember { mutableStateOf<AddressCandidate?>(null) }
+    var hasSearched by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    fun performSearch(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            Toast.makeText(context, "검색할 주소 또는 장소명을 입력해주세요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isSearching = true
+        hasSearched = true
+        errorMessage = null
+        selectedCandidate = null
+
+        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val candidates = mutableListOf<AddressCandidate>()
+
+            // 1. Android Geocoder
+            try {
+                if (android.location.Geocoder.isPresent()) {
+                    val geocoder = android.location.Geocoder(context, Locale.KOREAN)
+                    @Suppress("DEPRECATION")
+                    val list = geocoder.getFromLocationName(trimmed, 5)
+                    if (!list.isNullOrEmpty()) {
+                        for (addr in list) {
+                            val line = addr.getAddressLine(0) ?: trimmed
+                            val clean = line.replace("^대한민국\\s*".toRegex(), "").trim()
+                            val feature = addr.featureName ?: clean
+                            candidates.add(
+                                AddressCandidate(
+                                    title = if (feature.isNotEmpty() && feature != clean) feature else clean,
+                                    fullAddress = clean,
+                                    latitude = addr.latitude,
+                                    longitude = addr.longitude
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AddressSearch", "Geocoder search error: ${e.message}")
+            }
+
+            // 2. Fallback OpenStreetMap Nominatim
+            if (candidates.isEmpty()) {
+                try {
+                    val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+                    val url = java.net.URL("https://nominatim.openstreetmap.org/search?format=json&q=$encoded&limit=5&accept-language=ko")
+                    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                        setRequestProperty("User-Agent", "SafeCallAlertApp/1.0 (Android; Korean Address Search)")
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                    }
+                    val response = conn.inputStream.bufferedReader().use { it.readText() }
+                    val jsonArray = org.json.JSONArray(response)
+                    for (i in 0 until jsonArray.length()) {
+                        val obj = jsonArray.getJSONObject(i)
+                        val lat = obj.getDouble("lat")
+                        val lon = obj.getDouble("lon")
+                        val disp = obj.optString("display_name", trimmed)
+                        val clean = disp.replace("^대한민국\\s*,?\\s*".toRegex(), "")
+                            .split(",")
+                            .reversed()
+                            .joinToString(" ") { it.trim() }
+                        val name = obj.optString("name", clean.split(" ").lastOrNull() ?: clean)
+                        candidates.add(
+                            AddressCandidate(
+                                title = name.ifBlank { clean },
+                                fullAddress = clean,
+                                latitude = lat,
+                                longitude = lon
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.e("AddressSearch", "Nominatim search error: ${e.message}")
+                }
+            }
+
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                isSearching = false
+                searchResults = candidates
+                if (candidates.isNotEmpty()) {
+                    selectedCandidate = candidates.first()
+                } else {
+                    errorMessage = "'$trimmed' 에 대한 검색 결과가 없습니다.\n도로명 주소나 주요 건물명(예: 상록구 예술대학로, 서울역)으로 다시 검색해보세요."
+                }
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -2193,211 +2582,244 @@ fun MapPickerDialog(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(12.dp)
+                    .padding(20.dp)
             ) {
+                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "지도에서 위치 선택 🗺️",
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 18.sp,
-                        color = Color(0xFF0F172A)
-                    )
-                    IconButton(onClick = onDismissRequest) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close Map")
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text(
-                    text = "지도를 탭하거나 핀을 드래그하여 정확한 위치를 지정하고 주소를 검색할 수 있습니다.",
-                    fontSize = 12.sp,
-                    color = Color(0xFF64748B),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(16.dp))
-                ) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            android.webkit.WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.useWideViewPort = true
-                                settings.loadWithOverviewMode = true
-                                webViewClient = android.webkit.WebViewClient()
-                                webChromeClient = android.webkit.WebChromeClient()
-                                
-                                addJavascriptInterface(
-                                    WebAppInterface(ctx) { lat, lng, addr ->
-                                        selectedLat = lat
-                                        selectedLng = lng
-                                        selectedAddress = addr
-                                    },
-                                    "AndroidInterface"
-                                )
-                                
-                                val mapHtml = """
-                                    <!DOCTYPE html>
-                                    <html>
-                                    <head>
-                                        <meta charset="utf-8">
-                                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-                                        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-                                        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-                                        <style>
-                                            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-                                            #map { height: 100vh; width: 100vw; }
-                                            .leaflet-control-attribution { display: none; }
-                                            #search-container {
-                                                position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1000;
-                                                background: white; padding: 4px; border-radius: 12px;
-                                                box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; align-items: center;
-                                                border: 1px solid #E2E8F0;
-                                            }
-                                            #search-input {
-                                                flex: 1; border: none; padding: 10px 12px; font-size: 14px; outline: none; border-radius: 8px;
-                                            }
-                                            #search-button {
-                                                background: #0F172A; color: white; border: none; padding: 10px 16px;
-                                                border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; margin-right: 4px;
-                                            }
-                                        </style>
-                                    </head>
-                                    <body>
-                                        <div id="search-container">
-                                            <input type="text" id="search-input" placeholder="주소나 장소를 검색해보세요" onkeyup="if(event.keyCode==13) searchAddress()" />
-                                            <button id="search-button" onclick="searchAddress()">검색</button>
-                                        </div>
-                                        <div id="map"></div>
-                                        <script>
-                                            var map = L.map('map', { zoomControl: false }).setView([$startLat, $startLng], 16);
-                                            L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-                                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-                                            
-                                            var marker = L.marker([$startLat, $startLng], {draggable: true}).addTo(map);
-                                            
-                                            function reverseGeocode(lat, lng) {
-                                                fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng + '&accept-language=ko')
-                                                .then(response => response.json())
-                                                .then(data => {
-                                                    var address = data.display_name || "";
-                                                    var cleanAddress = address;
-                                                    if (address.indexOf("대한민국") === 0) {
-                                                        cleanAddress = address.replace(/^대한민국\s*,?\s*/, "").trim();
-                                                    }
-                                                    cleanAddress = cleanAddress.split(',').reverse().join(' ').replace(/\s+/g, ' ').trim();
-                                                    
-                                                    if (window.AndroidInterface) {
-                                                        window.AndroidInterface.onLocationSelected(lat, lng, cleanAddress);
-                                                    }
-                                                })
-                                                .catch(err => {
-                                                    if (window.AndroidInterface) {
-                                                        window.AndroidInterface.onLocationSelected(lat, lng, "");
-                                                    }
-                                                });
-                                            }
-
-                                            marker.on('dragend', function(e) {
-                                                var position = marker.getLatLng();
-                                                reverseGeocode(position.lat, position.lng);
-                                            });
-
-                                            map.on('click', function(e) {
-                                                marker.setLatLng(e.latlng);
-                                                reverseGeocode(e.latlng.lat, e.latlng.lng);
-                                            });
-
-                                            function searchAddress() {
-                                                var query = document.getElementById('search-input').value.trim();
-                                                if (!query) return;
-                                                fetch('https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(query) + '&limit=1&accept-language=ko')
-                                                .then(response => response.json())
-                                                .then(data => {
-                                                    if (data && data.length > 0) {
-                                                        var lat = parseFloat(data[0].lat);
-                                                        var lng = parseFloat(data[0].lon);
-                                                        var address = data[0].display_name;
-                                                        var cleanAddress = address;
-                                                        if (address.indexOf("대한민국") === 0) {
-                                                            cleanAddress = address.replace(/^대한민국\s*,?\s*/, "").trim();
-                                                        }
-                                                        cleanAddress = cleanAddress.split(',').reverse().join(' ').replace(/\s+/g, ' ').trim();
-
-                                                        map.setView([lat, lng], 16);
-                                                        marker.setLatLng([lat, lng]);
-                                                        
-                                                        if (window.AndroidInterface) {
-                                                            window.AndroidInterface.onLocationSelected(lat, lng, cleanAddress);
-                                                        }
-                                                    } else {
-                                                        if (window.AndroidInterface) {
-                                                            window.AndroidInterface.showToast("검색 결과가 없습니다.");
-                                                        }
-                                                    }
-                                                })
-                                                .catch(err => {
-                                                    if (window.AndroidInterface) {
-                                                        window.AndroidInterface.showToast("검색 중 오류가 발생했습니다.");
-                                                    }
-                                                });
-                                            }
-                                            
-                                            reverseGeocode($startLat, $startLng);
-                                        </script>
-                                    </body>
-                                    </html>
-                                """.trimIndent()
-                                loadDataWithBaseURL("https://openstreetmap.org", mapHtml, "text/html", "UTF-8", null)
-                            }
-                        }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
-                ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "선택된 위치 정보",
-                            fontWeight = FontWeight.Bold,
+                            text = "$targetTitle 주소 검색 🔍",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 18.sp,
+                            color = Color(0xFF0F172A)
+                        )
+                        Text(
+                            text = "한국어 주소/장소를 입력하면 위도·경도가 자동 지정됩니다.",
                             fontSize = 12.sp,
-                            color = Color(0xFF475569)
+                            color = Color(0xFF64748B),
+                            modifier = Modifier.padding(top = 2.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (selectedAddress.isNotEmpty()) selectedAddress else "지도 상의 지정 위치",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = Color(0xFF0F172A),
-                            lineHeight = 16.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "위도: ${String.format(Locale.US, "%.5f", selectedLat)}, 경도: ${String.format(Locale.US, "%.5f", selectedLng)}",
-                            fontSize = 11.sp,
-                            color = Color(0xFF64748B)
-                        )
+                    }
+                    IconButton(onClick = onDismissRequest) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                // Search Bar
+                OutlinedTextField(
+                    value = queryText,
+                    onValueChange = { queryText = it },
+                    placeholder = { Text("주소 또는 건물명 입력 (예: 예술대학로 6, 서울역)", fontSize = 13.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF2563EB),
+                        unfocusedBorderColor = Color(0xFFCBD5E1),
+                        focusedContainerColor = Color(0xFFF8FAFC),
+                        unfocusedContainerColor = Color(0xFFF8FAFC)
+                    ),
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = "Search", tint = Color(0xFF2563EB))
+                    },
+                    trailingIcon = {
+                        if (queryText.isNotEmpty()) {
+                            IconButton(onClick = { queryText = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color(0xFF94A3B8))
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onSearch = { performSearch(queryText) }
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Action Search Button
+                Button(
+                    onClick = { performSearch(queryText) },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isSearching
+                ) {
+                    if (isSearching) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("주소 검색 중...", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("주소 및 좌표 검색하기", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Results or guidance container
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFFF8FAFC))
+                        .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(14.dp))
+                        .padding(8.dp)
+                ) {
+                    if (isSearching) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(color = Color(0xFF2563EB))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text("주소와 위도/경도 좌표를 조회하는 중입니다...", fontSize = 13.sp, color = Color(0xFF64748B))
+                        }
+                    } else if (errorMessage != null) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = errorMessage ?: "",
+                                fontSize = 13.sp,
+                                color = Color(0xFF475569),
+                                textAlign = TextAlign.Center,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    } else if (!hasSearched) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(40.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "원하시는 한글 주소나 건물명을 검색해주세요.",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF64748B),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "예: 예술대학로6길 2, 상록구 월피동, 서울역",
+                                fontSize = 12.sp,
+                                color = Color(0xFF94A3B8),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else if (searchResults.isEmpty()) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text("검색된 주소 정보가 없습니다.", fontSize = 13.sp, color = Color(0xFF64748B))
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(searchResults) { item ->
+                                val isSelected = selectedCandidate == item
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { selectedCandidate = item },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isSelected) Color(0xFFEFF6FF) else Color.White
+                                    ),
+                                    border = BorderStroke(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) Color(0xFF2563EB) else Color(0xFFE2E8F0)
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.LocationOn,
+                                            contentDescription = null,
+                                            tint = if (isSelected) Color(0xFF2563EB) else Color(0xFF94A3B8),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = item.fullAddress,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp,
+                                                color = Color(0xFF0F172A)
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = "위도: ${String.format(Locale.US, "%.5f", item.latitude)}, 경도: ${String.format(Locale.US, "%.5f", item.longitude)}",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF64748B)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Bottom confirmation area
+                if (selectedCandidate != null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9)),
+                        border = BorderStroke(1.dp, Color(0xFFCBD5E1))
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "선택된 위치 및 좌표",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF475569)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = selectedCandidate?.fullAddress ?: "",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
+                            Text(
+                                text = "위도: ${String.format(Locale.US, "%.5f", selectedCandidate?.latitude ?: 0.0)}, 경도: ${String.format(Locale.US, "%.5f", selectedCandidate?.longitude ?: 0.0)}",
+                                fontSize = 11.sp,
+                                color = Color(0xFF2563EB),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2412,13 +2834,16 @@ fun MapPickerDialog(
                     }
                     Button(
                         onClick = {
-                            onConfirm(selectedLat, selectedLng, selectedAddress)
+                            selectedCandidate?.let {
+                                onConfirm(it.latitude, it.longitude, it.fullAddress)
+                            }
                         },
-                        modifier = Modifier.weight(1.5f),
+                        modifier = Modifier.weight(1.6f),
+                        enabled = selectedCandidate != null,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("이 위치로 설정 완료", fontWeight = FontWeight.Bold)
+                        Text("이 주소로 자동 지정 완료", fontWeight = FontWeight.Bold)
                     }
                 }
             }
